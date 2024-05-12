@@ -12,7 +12,15 @@ func (a *app) start() error {
 	a.parseFlags()
 	a.validate()
 
-	return nil
+	var err error
+
+	if a.receive {
+		err = a.receiveHandler()
+	} else {
+		err = a.sendHandler()
+	}
+
+	return err
 }
 
 func (a *app) parseFlags() {
