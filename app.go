@@ -6,6 +6,7 @@ type app struct {
 	receive bool
 	send    bool
 	file    string
+	output  string
 }
 
 func newApp() *app {
