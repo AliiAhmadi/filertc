@@ -208,7 +208,7 @@ func (s *sendSession) start() error {
 	}
 
 	go s.readFile()
-	if err := s.sess.ReadSDP(); err != nil {
+	if err := s.sess.readSDP(); err != nil {
 		logrus.Errorln(err)
 		return err
 	}
