@@ -24,6 +24,7 @@ func newReceiveSession(c *receiveConfig) *receiveSession {
 			Done:         make(chan struct{}),
 			NetworkStats: newStats(),
 			stunServers:  []string{fmt.Sprintf("stun:%s", os.Getenv("STUN_SERVER"))},
+			onCompletion: func() {},
 		},
 		stream:      c.Stream,
 		msgChannel:  make(chan webrtc.DataChannelMessage, 4096*2),
@@ -51,6 +52,35 @@ func (s *receiveSession) start() error {
 	return nil
 }
 
+func (s *receiveSession) receiveData() {
+	logrus.Infoln("start receiving data ...")
+	defer logrus.Infoln("done receiving ...")
+
+	for {
+		select {
+		case <-s.sess.Done:
+			s.sess.NetworkStats.stop()
+			fmt.Printf("\nNetwork: %s\n", s.sess.NetworkStats.String())
+			return
+		case msg := <-s.msgChannel:
+			n, err := s.stream.Write(msg.Data)
+			if err != nil {
+				logrus.Errorln(err)
+			} else {
+				speed := s.sess.NetworkStats.bandwidth()
+				fmt.Printf("Transferring at %.2f MB/s\r", speed)
+				s.sess.NetworkStats.addBytes(uint64(n))
+			}
+		}
+	}
+}
+
+func (s *receiveSession) onConnectionStateChange() func(webrtc.ICEConnectionState) {
+	return func(i webrtc.ICEConnectionState) {
+		logrus.Infof("ICE Connection State has changed: %s\n", i.String())
+	}
+}
+
 func (s *receiveSession) initialize() error {
 	if s.initialized {
 		return nil
@@ -74,4 +104,38 @@ func (s *receiveSession) initialize() error {
 
 	s.initialized = true
 	return nil
+}
+
+func (s *receiveSession) createDataHandler() {
+	s.sess.onDataChannel(func(d *webrtc.DataChannel) {
+		logrus.Debugf("New DataChannel %s %d\n", d.Label(), d.ID())
+		s.sess.NetworkStats.start()
+		d.OnMessage(s.onMessage())
+		d.OnClose(s.onClose())
+	})
+}
+
+func (s *inSession) onDataChannel(f func(*webrtc.DataChannel)) {
+	s.peerConnection.OnDataChannel(f)
+}
+
+func (s *inSession) createAnswer() error {
+	ans, err := s.peerConnection.CreateAnswer(nil)
+	if err != nil {
+		return err
+	}
+
+	return s.createSessionDescription(ans)
+}
+
+func (s *receiveSession) onMessage() func(webrtc.DataChannelMessage) {
+	return func(d webrtc.DataChannelMessage) {
+		s.msgChannel <- d
+	}
+}
+
+func (s *receiveSession) onClose() func() {
+	return func() {
+		close(s.sess.Done)
+	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"sync"
 	"time"
 )
@@ -100,4 +101,10 @@ func (s *stats) duration() time.Duration {
 	}
 
 	return s.timeStop.Sub(s.timeStart) - s.timePaused
+}
+
+func (s *stats) String() string {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+	return fmt.Sprintf("%v bytes | %-v | %0.4f MB/s", s.bytes(), s.duration(), s.bandwidth())
 }

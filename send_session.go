@@ -49,7 +49,8 @@ func newSendSession(c sendConfig) *sendSession {
 			NetworkStats: &stats{
 				lock: &sync.RWMutex{},
 			},
-			stunServers: []string{fmt.Sprintf("stun:%s", c.STUN)},
+			stunServers:  []string{fmt.Sprintf("stun:%s", c.STUN)},
+			onCompletion: func() {},
 		},
 		stream:       c.Stream,
 		initialized:  false,
