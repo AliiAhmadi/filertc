@@ -7,8 +7,9 @@ import (
 )
 
 const (
-	version = "1.0.0"
-	name    = "filertc"
+	version        = "1.0.0"
+	name           = "filertc"
+	senderBuffSize = 16384
 )
 
 func init() {
