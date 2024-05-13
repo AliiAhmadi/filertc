@@ -98,6 +98,59 @@ func (s *inSession) createConnection(changeFunction func(webrtc.ICEConnectionSta
 	return nil
 }
 
+func (s *inSession) createDataChannel(c *webrtc.DataChannelInit) (*webrtc.DataChannel, error) {
+	return s.peerConnection.CreateDataChannel("data", c)
+}
+
+func (s *sendSession) onBufferedAmountLow() func() {
+	return func() {
+		d := <-s.output
+		if d.n != 0 {
+			s.msgToBeSent = append(s.msgToBeSent, d)
+		} else if len(s.msgToBeSent) == 0 && s.dataChannel.BufferedAmount() == 0 {
+			s.sess.NetworkStats.stop()
+			s.close(false)
+			return
+		}
+
+		speed := s.sess.NetworkStats.bandwidth()
+		fmt.Printf("Transferring at %.2f MB/s\r", speed)
+
+		for len(s.msgToBeSent) != 0 {
+			cur := s.msgToBeSent[0]
+
+			if err := s.dataChannel.Send(cur.buff); err != nil {
+				logrus.Errorf("Error, cannot send to client: %v\n", err)
+				return
+			}
+
+			s.sess.NetworkStats.addBytes(uint64(cur.n))
+			s.msgToBeSent = s.msgToBeSent[1:]
+		}
+	}
+}
+
+func (s *sendSession) createDataChannel() error {
+	o := true
+	mxPacketLifeTime := uint16(10000)
+	dChannel, err := s.sess.createDataChannel(&webrtc.DataChannelInit{
+		Ordered:           &o,
+		MaxPacketLifeTime: &mxPacketLifeTime,
+	})
+
+	if err != nil {
+		return err
+	}
+
+	s.dataChannel = dChannel
+	s.dataChannel.OnBufferedAmountLow(s.onBufferedAmountLow())
+	s.dataChannel.SetBufferedAmountLowThreshold(bufferThreshold)
+	s.dataChannel.OnOpen(s.onOpenHandler())
+	s.dataChannel.OnClose(s.onCloseHandler())
+
+	return nil
+}
+
 func (s *sendSession) Initialize() error {
 	if s.initialized {
 		return nil

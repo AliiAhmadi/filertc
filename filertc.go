@@ -7,9 +7,10 @@ import (
 )
 
 const (
-	version        = "1.0.0"
-	name           = "filertc"
-	senderBuffSize = 16384
+	version         = "1.0.0"
+	name            = "filertc"
+	senderBuffSize  = 16384
+	bufferThreshold = 512 * 1024
 )
 
 func init() {
