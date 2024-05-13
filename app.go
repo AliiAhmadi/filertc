@@ -7,7 +7,7 @@ type app struct {
 	send    bool
 	file    string
 	output  string
-	secret  string
+	// secret  string
 }
 
 func newApp() *app {
