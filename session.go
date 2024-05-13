@@ -102,6 +102,31 @@ func (s *inSession) createDataChannel(c *webrtc.DataChannelInit) (*webrtc.DataCh
 	return s.peerConnection.CreateDataChannel("data", c)
 }
 
+func (s *sendSession) close(call bool) {
+	if !call {
+		s.dataChannel.Close()
+	}
+
+	s.doneCheckLock.Lock()
+	if s.doneCheck {
+		s.doneCheckLock.Unlock()
+		return
+	}
+	s.doneCheck = true
+	s.doneCheckLock.Unlock()
+
+	s.dumpStats()
+	close(s.sess.Done)
+}
+
+// TODO: string implementation for below
+func (s *sendSession) dumpStats() {
+	fmt.Printf(`
+Disk    : %v
+Network : %v
+`, s.readingStats, s.sess.NetworkStats)
+}
+
 func (s *sendSession) onBufferedAmountLow() func() {
 	return func() {
 		d := <-s.output
@@ -127,6 +152,32 @@ func (s *sendSession) onBufferedAmountLow() func() {
 			s.sess.NetworkStats.addBytes(uint64(cur.n))
 			s.msgToBeSent = s.msgToBeSent[1:]
 		}
+	}
+}
+
+func (s *sendSession) writeToNetwork() {
+	s.dataChannel.OnBufferedAmountLow(s.onBufferedAmountLow())
+
+	<-s.stopSending
+	s.dataChannel.OnBufferedAmountLow(nil)
+	s.sess.NetworkStats.pause()
+	logrus.Info("Pausing network I/O... (remaining at least %v packets)\n", len(s.output))
+}
+
+func (s *sendSession) onOpenHandler() func() {
+	return func() {
+		s.sess.NetworkStats.start()
+
+		logrus.Info("start sending data ...")
+		defer logrus.Info("stop sending data ...")
+
+		s.writeToNetwork()
+	}
+}
+
+func (s *sendSession) onCloseHandler() func() {
+	return func() {
+		s.close(true)
 	}
 }
 
@@ -199,6 +250,57 @@ func (s *sendSession) Initialize() error {
 
 	s.initialized = true
 	return nil
+}
+
+func (s *sendSession) readFile() {
+	logrus.Info("start reading data ...")
+	s.readingStats.start()
+
+	defer func() {
+		s.readingStats.pause()
+		logrus.Info("reading data paused ...")
+		close(s.output)
+	}()
+
+	for {
+		s.dataBuff = s.dataBuff[:cap(s.dataBuff)]
+		n, err := s.stream.Read(s.dataBuff)
+		if err != nil {
+			switch err {
+			case io.EOF:
+				s.readingStats.stop()
+				logrus.Debug("Got EOF after %v bytes!\n", s.readingStats.bytes())
+			default:
+				logrus.Errorf("reading error: %v", err)
+			}
+			return
+		}
+
+		s.dataBuff = s.dataBuff[:n]
+		s.readingStats.addBytes(uint64(n))
+
+		s.output <- outputMsg{
+			n:    n,
+			buff: append([]byte(nil), s.dataBuff...),
+		}
+	}
+}
+
+func (s *inSession) readSDP() error {
+	var sdp webrtc.SessionDescription
+
+	fmt.Println("Enter remote SDP:")
+	for {
+		enc, err := readStream(s.sdpInput)
+		if err == nil {
+			if err := decode(enc, &sdp); err != nil {
+				break
+			}
+		}
+		logrus.Println("Invalid SDP, try again ...")
+	}
+
+	return s.peerConnection.SetRemoteDescription(sdp)
 }
 
 // TODO
