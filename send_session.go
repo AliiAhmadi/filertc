@@ -161,7 +161,7 @@ func (s *sendSession) writeToNetwork() {
 	<-s.stopSending
 	s.dataChannel.OnBufferedAmountLow(nil)
 	s.sess.NetworkStats.pause()
-	logrus.Info("Pausing network I/O... (remaining at least %v packets)\n", len(s.output))
+	logrus.Infof("Pausing network I/O... (remaining at least %v packets)\n", len(s.output))
 }
 
 func (s *sendSession) onOpenHandler() func() {
@@ -269,7 +269,7 @@ func (s *sendSession) readFile() {
 			switch err {
 			case io.EOF:
 				s.readingStats.stop()
-				logrus.Debug("Got EOF after %v bytes!\n", s.readingStats.bytes())
+				logrus.Debugf("Got EOF after %v bytes!\n", s.readingStats.bytes())
 			default:
 				logrus.Errorf("reading error: %v", err)
 			}

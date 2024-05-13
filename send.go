@@ -22,3 +22,8 @@ type sendConfig struct {
 	commConfiguration
 	Stream io.Reader // The Stream to read from
 }
+
+type receiveConfig struct {
+	commConfiguration
+	Stream io.Writer // The Stream to write to
+}
