@@ -23,7 +23,7 @@ func newReceiveSession(c *receiveConfig) *receiveSession {
 			sdpOutput:    c.SDPOutput,
 			Done:         make(chan struct{}),
 			NetworkStats: newStats(),
-			stunServers:  []string{fmt.Sprintf("stun:%s", os.Getenv("STUN_SERVER"))},
+			stunServers:  []string{fmt.Sprintf("stun:%s", stun)},
 			onCompletion: func() {},
 		},
 		stream:      c.Stream,

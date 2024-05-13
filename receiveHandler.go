@@ -3,7 +3,7 @@ package main
 import "os"
 
 func (a *app) receiveHandler() error {
-	f, err := os.OpenFile(a.file, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	f, err := os.OpenFile(a.output, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return err
 	}
@@ -11,6 +11,10 @@ func (a *app) receiveHandler() error {
 
 	cf := receiveConfig{
 		Stream: f,
+		commConfiguration: commConfiguration{
+			OnCompletion: func() {},
+			STUN:         stun,
+		},
 	}
 
 	s := newReceiveSession(&cf)

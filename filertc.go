@@ -2,8 +2,6 @@ package main
 
 import (
 	"log"
-
-	"github.com/joho/godotenv"
 )
 
 const (
@@ -11,14 +9,10 @@ const (
 	name            = "filertc"
 	senderBuffSize  = 16384
 	bufferThreshold = 512 * 1024
+	stun            = "stun.l.google.com:19302"
 )
 
 func init() {
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatal("error loading .env file")
-	}
-
 	setup()
 }
 

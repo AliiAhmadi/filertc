@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := build
 
 build: 
-	@go build -o filertc .
+	@go build -o frtc .
 .PHONY: build
 
 build-all:
@@ -14,3 +14,7 @@ build-all:
 	@echo "compiling macos version ..."
 	@GOOS=darwin GOARCH=arm64 go build -o ./bin/macos/frtc .
 .PHONY: build-all
+
+install: build
+	@sudo mv ./frtc /bin/
+.PHONY: install

@@ -3,7 +3,6 @@ module github.com/AliiAhmadi/filertc
 go 1.22.0
 
 require (
-	github.com/joho/godotenv v1.5.1
 	github.com/pion/webrtc/v4 v4.0.0-beta.19
 	github.com/sirupsen/logrus v1.9.3
 )

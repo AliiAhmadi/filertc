@@ -9,8 +9,6 @@ func (a *app) sendHandler() error {
 	}
 	defer f.Close()
 
-	stun := os.Getenv("STUN_SERVER")
-
 	err = parseSTUN(stun)
 	if err != nil {
 		return err
