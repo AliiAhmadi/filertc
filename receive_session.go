@@ -14,9 +14,10 @@ type receiveSession struct {
 	stream      io.Writer
 	msgChannel  chan webrtc.DataChannelMessage
 	initialized bool
+	a           *app
 }
 
-func newReceiveSession(c *receiveConfig) *receiveSession {
+func newReceiveSession(c receiveConfig) *receiveSession {
 	s := &receiveSession{
 		sess: inSession{
 			sdpInput:     c.SDPProvider,

@@ -9,6 +9,11 @@ func (a *app) receiveHandler() error {
 	}
 	defer f.Close()
 
+	err = parseSTUN(stun)
+	if err != nil {
+		return err
+	}
+
 	cf := receiveConfig{
 		Stream: f,
 		commConfiguration: commConfiguration{
@@ -17,7 +22,8 @@ func (a *app) receiveHandler() error {
 		},
 	}
 
-	s := newReceiveSession(&cf)
+	s := newReceiveSession(cf)
+	s.a = a
 
 	return s.start()
 }
