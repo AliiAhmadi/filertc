@@ -151,6 +151,32 @@ func (s *sendSession) createDataChannel() error {
 	return nil
 }
 
+func (s *inSession) createOffer() error {
+	ans, err := s.peerConnection.CreateOffer(nil)
+	if err != nil {
+		return err
+	}
+
+	return s.createSessionDescription(ans)
+}
+
+func (s *inSession) createSessionDescription(d webrtc.SessionDescription) error {
+	if err := s.peerConnection.SetLocalDescription(d); err != nil {
+		return err
+	}
+
+	d.SDP = stripSDP(d.SDP)
+
+	res, err := encode(d)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("Send this SDP:")
+	fmt.Fprintf(s.sdpOutput, "%s\n", res)
+	return nil
+}
+
 func (s *sendSession) Initialize() error {
 	if s.initialized {
 		return nil
