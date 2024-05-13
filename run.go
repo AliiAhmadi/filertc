@@ -28,7 +28,6 @@ func (a *app) parseFlags() {
 	flag.BoolVar(&a.send, "send", false, "want to be Sender")
 	flag.StringVar(&a.file, "file", "", "File want to send")
 	flag.StringVar(&a.output, "output", "out", "Name of received file")
-	flag.StringVar(&a.secret, "secret", "", "Secret of sender")
 
 	flag.Parse()
 }
@@ -44,10 +43,6 @@ func (a *app) validate() {
 
 	if a.send && a.file == "" {
 		logrus.Fatal("file can not be empty")
-	}
-
-	if a.receive && a.secret == "" {
-		logrus.Fatal("you should enter secret")
 	}
 
 	if a.send {

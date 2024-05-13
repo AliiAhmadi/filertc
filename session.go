@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/pion/webrtc/v4"
+	"github.com/sirupsen/logrus"
 )
 
 type sendSession struct {
@@ -69,6 +70,71 @@ func newSendSession(c sendConfig) *sendSession {
 	return s
 }
 
+func (s *sendSession) onConnectionStateChange() func(webrtc.ICEConnectionState) {
+	return func(connState webrtc.ICEConnectionState) {
+		logrus.Infof("ICE Connection State has changed: %s\n", connState.String())
+		if connState == webrtc.ICEConnectionStateDisconnected {
+			s.stopSending <- struct{}{}
+		}
+	}
+}
+
+func (s *inSession) createConnection(changeFunction func(webrtc.ICEConnectionState)) error {
+	config := webrtc.Configuration{
+		ICEServers: []webrtc.ICEServer{
+			{
+				URLs: s.stunServers,
+			},
+		},
+	}
+
+	pc, err := webrtc.NewPeerConnection(config)
+	if err != nil {
+		return err
+	}
+
+	s.peerConnection = pc
+	pc.OnICEConnectionStateChange(changeFunction)
+	return nil
+}
+
+func (s *sendSession) Initialize() error {
+	if s.initialized {
+		return nil
+	}
+
+	if err := s.sess.createConnection(s.onConnectionStateChange()); err != nil {
+		logrus.Errorln(err)
+		return err
+	}
+
+	if err := s.createDataChannel(); err != nil {
+		logrus.Errorln(err)
+		return err
+	}
+
+	if err := s.sess.createOffer(); err != nil {
+		logrus.Errorln(err)
+		return err
+	}
+
+	s.initialized = true
+	return nil
+}
+
+// TODO
 func (s *sendSession) start() error {
+	if err := s.Initialize(); err != nil {
+		return err
+	}
+
+	go s.readFile()
+	if err := s.sess.ReadSDP(); err != nil {
+		logrus.Errorln(err)
+		return err
+	}
+
+	<-s.sess.Done
+	s.sess.onCompletion()
 	return nil
 }
