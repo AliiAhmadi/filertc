@@ -294,7 +294,7 @@ func (s *inSession) readSDP() error {
 	for {
 		enc, err := readStream(s.sdpInput)
 		if err == nil {
-			if err := decode(enc, &sdp); err != nil {
+			if err := decode(enc, &sdp); err == nil {
 				break
 			}
 		}

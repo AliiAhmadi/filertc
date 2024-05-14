@@ -26,6 +26,6 @@ func readStream(s io.Reader) (string, error) {
 		}
 	}
 
-	fmt.Println()
+	fmt.Println("")
 	return inp, nil
 }
