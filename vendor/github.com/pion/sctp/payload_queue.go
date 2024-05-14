@@ -1,10 +1,6 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
-// SPDX-License-Identifier: MIT
-
 package sctp
 
 import (
-	"fmt"
 	"sort"
 )
 
@@ -36,9 +32,9 @@ func (q *payloadQueue) updateSortedKeys() {
 	})
 }
 
-func (q *payloadQueue) canPush(p *chunkPayloadData, cumulativeTSN uint32, maxTSNOffset uint32) bool {
+func (q *payloadQueue) canPush(p *chunkPayloadData, cumulativeTSN uint32) bool {
 	_, ok := q.chunkMap[p.tsn]
-	if ok || sna32LTE(p.tsn, cumulativeTSN) || sna32GTE(p.tsn, cumulativeTSN+maxTSNOffset) {
+	if ok || sna32LTE(p.tsn, cumulativeTSN) {
 		return false
 	}
 	return true
@@ -132,45 +128,16 @@ func (q *payloadQueue) getGapAckBlocks(cumulativeTSN uint32) (gapAckBlocks []gap
 	return gapAckBlocks
 }
 
-func (q *payloadQueue) getGapAckBlocksString(cumulativeTSN uint32) string {
-	gapAckBlocks := q.getGapAckBlocks(cumulativeTSN)
-	str := fmt.Sprintf("cumTSN=%d", cumulativeTSN)
-	for _, b := range gapAckBlocks {
-		str += fmt.Sprintf(",%d-%d", b.start, b.end)
-	}
-	return str
-}
-
 func (q *payloadQueue) markAsAcked(tsn uint32) int {
 	var nBytesAcked int
 	if c, ok := q.chunkMap[tsn]; ok {
 		c.acked = true
-		c.retransmit = false
 		nBytesAcked = len(c.userData)
 		q.nBytes -= nBytesAcked
 		c.userData = []byte{}
 	}
 
 	return nBytesAcked
-}
-
-func (q *payloadQueue) getLastTSNReceived() (uint32, bool) {
-	q.updateSortedKeys()
-
-	qlen := len(q.sorted)
-	if qlen == 0 {
-		return 0, false
-	}
-	return q.sorted[qlen-1], true
-}
-
-func (q *payloadQueue) markAllToRetrasmit() {
-	for _, c := range q.chunkMap {
-		if c.acked || c.abandoned() {
-			continue
-		}
-		c.retransmit = true
-	}
 }
 
 func (q *payloadQueue) getNumBytes() int {

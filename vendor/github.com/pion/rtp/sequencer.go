@@ -1,11 +1,10 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
-// SPDX-License-Identifier: MIT
-
 package rtp
 
 import (
 	"math"
+	"math/rand"
 	"sync"
+	"time"
 )
 
 // Sequencer generates sequential sequence numbers for building RTP packets
@@ -17,8 +16,11 @@ type Sequencer interface {
 // NewRandomSequencer returns a new sequencer starting from a random sequence
 // number
 func NewRandomSequencer() Sequencer {
+	rs := rand.NewSource(time.Now().UnixNano())
+	r := rand.New(rs)
+
 	return &sequencer{
-		sequenceNumber: uint16(globalMathRandomGenerator.Intn(math.MaxUint16)),
+		sequenceNumber: uint16(r.Uint32() % math.MaxUint16),
 	}
 }
 

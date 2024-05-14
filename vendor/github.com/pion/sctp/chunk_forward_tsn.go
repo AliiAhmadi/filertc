@@ -1,12 +1,10 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
-// SPDX-License-Identifier: MIT
-
 package sctp
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
+
+	"github.com/pkg/errors"
 )
 
 // This chunk shall be used by the data sender to inform the data
@@ -46,19 +44,13 @@ const (
 	forwardTSNStreamLength = 4
 )
 
-// Forward TSN chunk errors
-var (
-	ErrMarshalStreamFailed = errors.New("failed to marshal stream")
-	ErrChunkTooShort       = errors.New("chunk too short")
-)
-
 func (c *chunkForwardTSN) unmarshal(raw []byte) error {
 	if err := c.chunkHeader.unmarshal(raw); err != nil {
 		return err
 	}
 
 	if len(c.raw) < newCumulativeTSNLength {
-		return ErrChunkTooShort
+		return errors.New("chunk to short")
 	}
 
 	c.newCumulativeTSN = binary.BigEndian.Uint32(c.raw[0:])
@@ -69,7 +61,7 @@ func (c *chunkForwardTSN) unmarshal(raw []byte) error {
 		s := chunkForwardTSNStream{}
 
 		if err := s.unmarshal(c.raw[offset:]); err != nil {
-			return fmt.Errorf("%w: %v", ErrMarshalStreamFailed, err) //nolint:errorlint
+			return fmt.Errorf("failed to unmarshal stream: %v", err)
 		}
 
 		c.streams = append(c.streams, s)
@@ -88,7 +80,7 @@ func (c *chunkForwardTSN) marshal() ([]byte, error) {
 	for _, s := range c.streams {
 		b, err := s.marshal()
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrMarshalStreamFailed, err) //nolint:errorlint
+			return nil, fmt.Errorf("failed to marshal stream: %v", err)
 		}
 		out = append(out, b...)
 	}
@@ -133,7 +125,7 @@ func (s *chunkForwardTSNStream) length() int {
 
 func (s *chunkForwardTSNStream) unmarshal(raw []byte) error {
 	if len(raw) < forwardTSNStreamLength {
-		return ErrChunkTooShort
+		return errors.New("stream to short")
 	}
 	s.identifier = binary.BigEndian.Uint16(raw[0:])
 	s.sequence = binary.BigEndian.Uint16(raw[2:])
@@ -141,7 +133,7 @@ func (s *chunkForwardTSNStream) unmarshal(raw []byte) error {
 	return nil
 }
 
-func (s *chunkForwardTSNStream) marshal() ([]byte, error) { // nolint:unparam
+func (s *chunkForwardTSNStream) marshal() ([]byte, error) {
 	out := make([]byte, forwardTSNStreamLength)
 
 	binary.BigEndian.PutUint16(out[0:], s.identifier)

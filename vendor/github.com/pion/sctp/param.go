@@ -1,11 +1,7 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
-// SPDX-License-Identifier: MIT
-
 package sctp
 
 import (
-	"errors"
-	"fmt"
+	"github.com/pkg/errors"
 )
 
 type param interface {
@@ -13,17 +9,12 @@ type param interface {
 	length() int
 }
 
-// ErrParamTypeUnhandled is returned if unknown parameter type is specified.
-var ErrParamTypeUnhandled = errors.New("unhandled ParamType")
-
 func buildParam(t paramType, rawParam []byte) (param, error) {
 	switch t {
 	case forwardTSNSupp:
 		return (&paramForwardTSNSupported{}).unmarshal(rawParam)
 	case supportedExt:
 		return (&paramSupportedExtensions{}).unmarshal(rawParam)
-	case ecnCapable:
-		return (&paramECNCapable{}).unmarshal(rawParam)
 	case random:
 		return (&paramRandom{}).unmarshal(rawParam)
 	case reqHMACAlgo:
@@ -38,9 +29,6 @@ func buildParam(t paramType, rawParam []byte) (param, error) {
 		return (&paramOutgoingResetRequest{}).unmarshal(rawParam)
 	case reconfigResp:
 		return (&paramReconfigResponse{}).unmarshal(rawParam)
-	case zeroChecksumAcceptable:
-		return (&paramZeroChecksumAcceptable{}).unmarshal(rawParam)
-	default:
-		return nil, fmt.Errorf("%w: %v", ErrParamTypeUnhandled, t)
 	}
+	return nil, errors.Errorf("Unhandled ParamType %v", t)
 }

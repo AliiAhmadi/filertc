@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
-// SPDX-License-Identifier: MIT
-
 /*
 Package rtcp implements encoding and decoding of RTCP packets according to RFCs 3550 and 5506.
 
@@ -17,17 +14,16 @@ service parameters, perhaps by limiting flow, or using a different codec.
 
 Decoding RTCP packets:
 
-	pkts, err := rtcp.Unmarshal(rtcpData)
+	pkt, err := rtcp.Unmarshal(rtcpData)
 	// ...
-	for _, pkt := range pkts {
-		switch p := pkt.(type) {
-		case *rtcp.CompoundPacket:
-			...
-		case *rtcp.PictureLossIndication:
-			...
-		default:
-			...
-		}
+
+	switch p := pkt.(type) {
+	case *rtcp.CompoundPacket:
+		...
+	case *rtcp.PictureLossIndication:
+		...
+	default:
+		...
 	}
 
 Encoding RTCP packets:
@@ -38,5 +34,6 @@ Encoding RTCP packets:
 	}
 	pliData, err := pkt.Marshal()
 	// ...
+
 */
 package rtcp

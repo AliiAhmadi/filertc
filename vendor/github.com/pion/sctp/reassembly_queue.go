@@ -1,13 +1,9 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
-// SPDX-License-Identifier: MIT
-
 package sctp
 
 import (
-	"errors"
+	"fmt"
 	"io"
 	"sort"
-	"sync/atomic"
 )
 
 func sortChunksByTSN(a []*chunkPayloadData) {
@@ -105,10 +101,7 @@ type reassemblyQueue struct {
 	ordered         []*chunkSet
 	unordered       []*chunkSet
 	unorderedChunks []*chunkPayloadData
-	nBytes          uint64
 }
-
-var errTryAgain = errors.New("try again")
 
 func newReassemblyQueue(si uint16) *reassemblyQueue {
 	// From RFC 4960 Sec 6.5:
@@ -134,7 +127,6 @@ func (r *reassemblyQueue) push(chunk *chunkPayloadData) bool {
 	if chunk.unordered {
 		// First, insert into unorderedChunks array
 		r.unorderedChunks = append(r.unorderedChunks, chunk)
-		atomic.AddUint64(&r.nBytes, uint64(len(chunk.userData)))
 		sortChunksByTSN(r.unorderedChunks)
 
 		// Scan unorderedChunks that are contiguous (in TSN)
@@ -155,22 +147,11 @@ func (r *reassemblyQueue) push(chunk *chunkPayloadData) bool {
 		return false
 	}
 
-	// Check if a fragmented chunkSet with the fragmented SSN already exists
-	if chunk.isFragmented() {
-		for _, set := range r.ordered {
-			// nolint:godox
-			// TODO: add caution around SSN wrapping here... this helps only a little bit
-			// by ensuring we don't add to an unfragmented cset (1 chunk). There's
-			// a case where if the SSN does wrap around, we may see the same SSN
-			// for a different chunk.
-
-			// nolint:godox
-			// TODO: this slice can get pretty big; it may be worth maintaining a map
-			// for O(1) lookups at the cost of 2x memory.
-			if set.ssn == chunk.streamSequenceNumber && set.chunks[0].isFragmented() {
-				cset = set
-				break
-			}
+	// Check if a chunkSet with the SSN already exists
+	for _, set := range r.ordered {
+		if set.ssn == chunk.streamSequenceNumber {
+			cset = set
+			break
 		}
 	}
 
@@ -182,8 +163,6 @@ func (r *reassemblyQueue) push(chunk *chunkPayloadData) bool {
 			sortChunksBySSN(r.ordered)
 		}
 	}
-
-	atomic.AddUint64(&r.nBytes, uint64(len(chunk.userData)))
 
 	return cset.push(chunk)
 }
@@ -232,15 +211,15 @@ func (r *reassemblyQueue) findCompleteUnorderedChunkSet() *chunkSet {
 	}
 
 	// Extract the range of chunks
-	var chunks []*chunkPayloadData
-	chunks = append(chunks, r.unorderedChunks[startIdx:startIdx+nChunks]...)
-
+	chunks := r.unorderedChunks[startIdx : startIdx+nChunks]
 	r.unorderedChunks = append(
 		r.unorderedChunks[:startIdx],
 		r.unorderedChunks[startIdx+nChunks:]...)
 
 	chunkSet := newChunkSet(0, chunks[0].payloadType)
-	chunkSet.chunks = chunks
+	for _, c := range chunks {
+		chunkSet.push(c)
+	}
 
 	return chunkSet
 }
@@ -267,100 +246,77 @@ func (r *reassemblyQueue) isReadable() bool {
 func (r *reassemblyQueue) read(buf []byte) (int, PayloadProtocolIdentifier, error) {
 	var cset *chunkSet
 	// Check unordered first
-	switch {
-	case len(r.unordered) > 0:
+	if len(r.unordered) > 0 {
 		cset = r.unordered[0]
 		r.unordered = r.unordered[1:]
-	case len(r.ordered) > 0:
+	} else if len(r.ordered) > 0 {
 		// Now, check ordered
 		cset = r.ordered[0]
 		if !cset.isComplete() {
-			return 0, 0, errTryAgain
+			return 0, 0, fmt.Errorf("try again")
 		}
 		if sna16GT(cset.ssn, r.nextSSN) {
-			return 0, 0, errTryAgain
+			return 0, 0, fmt.Errorf("try again")
 		}
 		r.ordered = r.ordered[1:]
 		if cset.ssn == r.nextSSN {
 			r.nextSSN++
 		}
-	default:
-		return 0, 0, errTryAgain
+	} else {
+		return 0, 0, fmt.Errorf("try again")
 	}
 
 	// Concat all fragments into the buffer
 	nWritten := 0
 	ppi := cset.ppi
-	var err error
 	for _, c := range cset.chunks {
-		toCopy := len(c.userData)
-		r.subtractNumBytes(toCopy)
-		if err == nil {
-			n := copy(buf[nWritten:], c.userData)
-			nWritten += n
-			if n < toCopy {
-				err = io.ErrShortBuffer
+		n := copy(buf[nWritten:], c.userData)
+		nWritten += n
+		if n < len(c.userData) {
+			return nWritten, ppi, io.ErrShortBuffer
+		}
+	}
+
+	return nWritten, ppi, nil
+}
+
+func (r *reassemblyQueue) forwardTSN(newCumulativeTSN uint32, unordered bool, lastSSN uint16) {
+	if unordered {
+		// This stream is configured to use unordered data. (The given SSN
+		// has no significance)
+		// Remove all fragments in the unordered sets that contains chunks
+		// equal to or older than `newCumulativeTSN`.
+		// We know all sets in the r.unordered are complete ones.
+		// Just remove chunks that are equal to or older than newCumulativeTSN
+		// from the unorderedChunks
+		lastIdx := -1
+		for i, c := range r.unorderedChunks {
+			if sna32GT(c.tsn, newCumulativeTSN) {
+				break
 			}
+			lastIdx = i
 		}
-	}
-
-	return nWritten, ppi, err
-}
-
-func (r *reassemblyQueue) forwardTSNForOrdered(lastSSN uint16) {
-	// Use lastSSN to locate a chunkSet then remove it if the set has
-	// not been complete
-	keep := []*chunkSet{}
-	for _, set := range r.ordered {
-		if sna16LTE(set.ssn, lastSSN) {
-			if !set.isComplete() {
-				// drop the set
-				for _, c := range set.chunks {
-					r.subtractNumBytes(len(c.userData))
-				}
-				continue
-			}
+		if lastIdx >= 0 {
+			r.unorderedChunks = r.unorderedChunks[lastIdx+1:]
 		}
-		keep = append(keep, set)
-	}
-	r.ordered = keep
-
-	// Finally, forward nextSSN
-	if sna16LTE(r.nextSSN, lastSSN) {
-		r.nextSSN = lastSSN + 1
-	}
-}
-
-func (r *reassemblyQueue) forwardTSNForUnordered(newCumulativeTSN uint32) {
-	// Remove all fragments in the unordered sets that contains chunks
-	// equal to or older than `newCumulativeTSN`.
-	// We know all sets in the r.unordered are complete ones.
-	// Just remove chunks that are equal to or older than newCumulativeTSN
-	// from the unorderedChunks
-	lastIdx := -1
-	for i, c := range r.unorderedChunks {
-		if sna32GT(c.tsn, newCumulativeTSN) {
-			break
-		}
-		lastIdx = i
-	}
-	if lastIdx >= 0 {
-		for _, c := range r.unorderedChunks[0 : lastIdx+1] {
-			r.subtractNumBytes(len(c.userData))
-		}
-		r.unorderedChunks = r.unorderedChunks[lastIdx+1:]
-	}
-}
-
-func (r *reassemblyQueue) subtractNumBytes(nBytes int) {
-	cur := atomic.LoadUint64(&r.nBytes)
-	if int(cur) >= nBytes {
-		atomic.AddUint64(&r.nBytes, -uint64(nBytes))
 	} else {
-		atomic.StoreUint64(&r.nBytes, 0)
-	}
-}
+		// This stream is configured to use ordered data.
+		// Use lastSSN to locate a chunkSet then remove it if the set has
+		// not been complete
+		keep := []*chunkSet{}
+		for _, set := range r.ordered {
+			if sna16LTE(set.ssn, lastSSN) {
+				if !set.isComplete() {
+					continue // drop
+				}
+			}
+			keep = append(keep, set)
+		}
+		r.ordered = keep
 
-func (r *reassemblyQueue) getNumBytes() int {
-	return int(atomic.LoadUint64(&r.nBytes))
+		// Finally, forward nextSSN
+		if sna16LTE(r.nextSSN, lastSSN) {
+			r.nextSSN = lastSSN + 1
+		}
+	}
 }

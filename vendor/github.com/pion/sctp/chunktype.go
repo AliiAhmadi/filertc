@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
-// SPDX-License-Identifier: MIT
-
 package sctp
 
 import "fmt"
@@ -33,37 +30,37 @@ const (
 func (c chunkType) String() string {
 	switch c {
 	case ctPayloadData:
-		return "DATA"
+		return "Payload data"
 	case ctInit:
-		return "INIT"
+		return "Initiation"
 	case ctInitAck:
-		return "INIT-ACK"
+		return "Initiation Acknowledgement"
 	case ctSack:
-		return "SACK"
+		return "Selective Acknowledgement"
 	case ctHeartbeat:
-		return "HEARTBEAT"
+		return "Heartbeat"
 	case ctHeartbeatAck:
-		return "HEARTBEAT-ACK"
+		return "Heartbeat Acknowledgement"
 	case ctAbort:
-		return "ABORT"
+		return "Abort"
 	case ctShutdown:
-		return "SHUTDOWN"
+		return "Shutdown"
 	case ctShutdownAck:
-		return "SHUTDOWN-ACK"
+		return "Shutdown Acknowledgement"
 	case ctError:
-		return "ERROR"
+		return "Error"
 	case ctCookieEcho:
-		return "COOKIE-ECHO"
+		return "Cookie Echo"
 	case ctCookieAck:
-		return "COOKIE-ACK"
+		return "Cookie Acknowledgement"
 	case ctCWR:
-		return "ECNE" // Explicit Congestion Notification Echo
+		return "Congestion Window Reduced"
 	case ctShutdownComplete:
-		return "SHUTDOWN-COMPLETE"
+		return "Shutdown Complete"
 	case ctReconfig:
-		return "RECONFIG" // Re-configuration
+		return "Re-configuration Chunk (RE-CONFIG)"
 	case ctForwardTSN:
-		return "FORWARD-TSN"
+		return "FORWARD TSN"
 	default:
 		return fmt.Sprintf("Unknown ChunkType: %d", c)
 	}

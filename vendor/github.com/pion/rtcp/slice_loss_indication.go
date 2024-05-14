@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
-// SPDX-License-Identifier: MIT
-
 package rtcp
 
 import (
@@ -33,6 +30,8 @@ type SliceLossIndication struct {
 	SLI []SLIEntry
 }
 
+var _ Packet = (*SliceLossIndication)(nil) // assert is a Packet
+
 const (
 	sliLength = 2
 	sliOffset = 8
@@ -40,6 +39,7 @@ const (
 
 // Marshal encodes the SliceLossIndication in binary
 func (p SliceLossIndication) Marshal() ([]byte, error) {
+
 	if len(p.SLI)+sliLength > math.MaxUint8 {
 		return nil, errTooManyReports
 	}
@@ -85,16 +85,14 @@ func (p *SliceLossIndication) Unmarshal(rawPacket []byte) error {
 	for i := headerLength + sliOffset; i < (headerLength + int(h.Length*4)); i += 4 {
 		sli := binary.BigEndian.Uint32(rawPacket[i:])
 		p.SLI = append(p.SLI, SLIEntry{
-			First:   uint16((sli >> 19) & 0x1FFF),
-			Number:  uint16((sli >> 6) & 0x1FFF),
-			Picture: uint8(sli & 0x3F),
-		})
+			uint16((sli >> 19) & 0x1FFF),
+			uint16((sli >> 6) & 0x1FFF),
+			uint8(sli & 0x3F)})
 	}
 	return nil
 }
 
-// MarshalSize returns the size of the packet once marshaled
-func (p *SliceLossIndication) MarshalSize() int {
+func (p *SliceLossIndication) len() int {
 	return headerLength + sliOffset + (len(p.SLI) * 4)
 }
 
@@ -103,7 +101,7 @@ func (p *SliceLossIndication) Header() Header {
 	return Header{
 		Count:  FormatSLI,
 		Type:   TypeTransportSpecificFeedback,
-		Length: uint16((p.MarshalSize() / 4) - 1),
+		Length: uint16((p.len() / 4) - 1),
 	}
 }
 

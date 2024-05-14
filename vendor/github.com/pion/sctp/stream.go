@@ -1,18 +1,11 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
-// SPDX-License-Identifier: MIT
-
 package sctp
 
 import (
-	"errors"
-	"fmt"
-	"io"
-	"os"
+	"math"
 	"sync"
-	"sync/atomic"
-	"time"
 
 	"github.com/pion/logging"
+	"github.com/pkg/errors"
 )
 
 const (
@@ -22,36 +15,6 @@ const (
 	ReliabilityTypeRexmit byte = 1
 	// ReliabilityTypeTimed is used for partial reliability by retransmission duration
 	ReliabilityTypeTimed byte = 2
-)
-
-// StreamState is an enum for SCTP Stream state field
-// This field identifies the state of stream.
-type StreamState int
-
-// StreamState enums
-const (
-	StreamStateOpen    StreamState = iota // Stream object starts with StreamStateOpen
-	StreamStateClosing                    // Outgoing stream is being reset
-	StreamStateClosed                     // Stream has been closed
-)
-
-func (ss StreamState) String() string {
-	switch ss {
-	case StreamStateOpen:
-		return "open"
-	case StreamStateClosing:
-		return "closing"
-	case StreamStateClosed:
-		return "closed"
-	}
-	return "unknown"
-}
-
-// SCTP stream errors
-var (
-	ErrOutboundPacketTooLarge = errors.New("outbound packet larger than maximum message size")
-	ErrStreamClosed           = errors.New("stream closed")
-	ErrReadDeadlineExceeded   = fmt.Errorf("read deadline exceeded: %w", os.ErrDeadlineExceeded)
 )
 
 // Stream represents an SCTP stream
@@ -64,16 +27,14 @@ type Stream struct {
 	sequenceNumber      uint16
 	readNotifier        *sync.Cond
 	readErr             error
-	readTimeoutCancel   chan struct{}
+	writeErr            error
 	unordered           bool
 	reliabilityType     byte
 	reliabilityValue    uint32
 	bufferedAmount      uint64
 	bufferedAmountLow   uint64
 	onBufferedAmountLow func()
-	state               StreamState
 	log                 logging.LeveledLogger
-	name                string
 }
 
 // StreamIdentifier returns the Stream identifier associated to the stream.
@@ -85,7 +46,15 @@ func (s *Stream) StreamIdentifier() uint16 {
 
 // SetDefaultPayloadType sets the default payload type used by Write.
 func (s *Stream) SetDefaultPayloadType(defaultPayloadType PayloadProtocolIdentifier) {
-	atomic.StoreUint32((*uint32)(&s.defaultPayloadType), uint32(defaultPayloadType))
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	s.setDefaultPayloadType(defaultPayloadType)
+}
+
+// setDefaultPayloadType sets the defaultPayloadType. The caller should hold the lock.
+func (s *Stream) setDefaultPayloadType(defaultPayloadType PayloadProtocolIdentifier) {
+	s.defaultPayloadType = defaultPayloadType
 }
 
 // SetReliabilityParams sets reliability parameters for this stream.
@@ -99,8 +68,6 @@ func (s *Stream) SetReliabilityParams(unordered bool, relType byte, relVal uint3
 // setReliabilityParams sets reliability parameters for this stream.
 // The caller should hold the lock.
 func (s *Stream) setReliabilityParams(unordered bool, relType byte, relVal uint32) {
-	s.log.Debugf("[%s] reliability params: ordered=%v type=%d value=%d",
-		s.name, !unordered, relType, relVal)
 	s.unordered = unordered
 	s.reliabilityType = relType
 	s.reliabilityValue = relVal
@@ -114,117 +81,43 @@ func (s *Stream) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// ReadSCTP reads a packet of len(p) bytes and returns the associated Payload
-// Protocol Identifier.
+// ReadSCTP reads a packet of len(p) bytes and returns the associated Payload Protocol Identifier.
 // Returns EOF when the stream is reset or an error if the stream is closed
 // otherwise.
 func (s *Stream) ReadSCTP(p []byte) (int, PayloadProtocolIdentifier, error) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	defer func() {
-		// close readTimeoutCancel if the current read timeout routine is no longer effective
-		if s.readTimeoutCancel != nil && s.readErr != nil {
-			close(s.readTimeoutCancel)
-			s.readTimeoutCancel = nil
-		}
-	}()
-
 	for {
+		s.lock.Lock()
 		n, ppi, err := s.reassemblyQueue.read(p)
+		s.lock.Unlock()
 		if err == nil {
 			return n, ppi, nil
-		} else if errors.Is(err, io.ErrShortBuffer) {
-			return 0, PayloadProtocolIdentifier(0), err
 		}
 
+		s.lock.RLock()
 		err = s.readErr
 		if err != nil {
+			s.lock.RUnlock()
 			return 0, PayloadProtocolIdentifier(0), err
 		}
 
-		s.readNotifier.Wait()
-	}
-}
-
-// SetReadDeadline sets the read deadline in an identical way to net.Conn
-func (s *Stream) SetReadDeadline(deadline time.Time) error {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	if s.readTimeoutCancel != nil {
-		close(s.readTimeoutCancel)
-		s.readTimeoutCancel = nil
-	}
-
-	if s.readErr != nil {
-		if !errors.Is(s.readErr, ErrReadDeadlineExceeded) {
-			return nil
+		notifier := s.readNotifier
+		s.lock.RUnlock()
+		// Wait for read notification
+		if notifier != nil {
+			notifier.L.Lock()
+			notifier.Wait()
+			notifier.L.Unlock()
 		}
-		s.readErr = nil
 	}
-
-	if !deadline.IsZero() {
-		s.readTimeoutCancel = make(chan struct{})
-
-		go func(readTimeoutCancel chan struct{}) {
-			t := time.NewTimer(time.Until(deadline))
-			select {
-			case <-readTimeoutCancel:
-				t.Stop()
-				return
-			case <-t.C:
-				select {
-				case <-readTimeoutCancel:
-					return
-				default:
-				}
-				s.lock.Lock()
-				if s.readErr == nil {
-					s.readErr = ErrReadDeadlineExceeded
-				}
-				s.readTimeoutCancel = nil
-				s.lock.Unlock()
-
-				s.readNotifier.Signal()
-			}
-		}(s.readTimeoutCancel)
-	}
-	return nil
 }
 
 func (s *Stream) handleData(pd *chunkPayloadData) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
 	var readable bool
+	s.lock.Lock()
 	if s.reassemblyQueue.push(pd) {
 		readable = s.reassemblyQueue.isReadable()
-		s.log.Debugf("[%s] reassemblyQueue readable=%v", s.name, readable)
-		if readable {
-			s.log.Debugf("[%s] readNotifier.signal()", s.name)
-			s.readNotifier.Signal()
-			s.log.Debugf("[%s] readNotifier.signal() done", s.name)
-		}
 	}
-}
-
-func (s *Stream) handleForwardTSNForOrdered(ssn uint16) {
-	var readable bool
-
-	func() {
-		s.lock.Lock()
-		defer s.lock.Unlock()
-
-		if s.unordered {
-			return // unordered chunks are handled by handleForwardUnordered method
-		}
-
-		// Remove all chunks older than or equal to the new TSN from
-		// the reassemblyQueue.
-		s.reassemblyQueue.forwardTSNForOrdered(ssn)
-		readable = s.reassemblyQueue.isReadable()
-	}()
+	s.lock.Unlock()
 
 	// Notify the reader asynchronously if there's a data chunk to read.
 	if readable {
@@ -232,22 +125,14 @@ func (s *Stream) handleForwardTSNForOrdered(ssn uint16) {
 	}
 }
 
-func (s *Stream) handleForwardTSNForUnordered(newCumulativeTSN uint32) {
+func (s *Stream) handleForwardTSN(newCumulativeTSN uint32, ssn uint16) {
 	var readable bool
-
-	func() {
-		s.lock.Lock()
-		defer s.lock.Unlock()
-
-		if !s.unordered {
-			return // ordered chunks are handled by handleForwardTSNOrdered method
-		}
-
-		// Remove all chunks older than or equal to the new TSN from
-		// the reassemblyQueue.
-		s.reassemblyQueue.forwardTSNForUnordered(newCumulativeTSN)
-		readable = s.reassemblyQueue.isReadable()
-	}()
+	s.lock.Lock()
+	// Remove all chunks older than or equal to the new TSN from
+	// the reassemblyQueue.
+	s.reassemblyQueue.forwardTSN(newCumulativeTSN, s.unordered, ssn)
+	readable = s.reassemblyQueue.isReadable()
+	s.lock.Unlock()
 
 	// Notify the reader asynchronously if there's a data chunk to read.
 	if readable {
@@ -257,28 +142,25 @@ func (s *Stream) handleForwardTSNForUnordered(newCumulativeTSN uint32) {
 
 // Write writes len(p) bytes from p with the default Payload Protocol Identifier
 func (s *Stream) Write(p []byte) (n int, err error) {
-	ppi := PayloadProtocolIdentifier(atomic.LoadUint32((*uint32)(&s.defaultPayloadType)))
-	return s.WriteSCTP(p, ppi)
+	return s.WriteSCTP(p, s.defaultPayloadType)
 }
 
 // WriteSCTP writes len(p) bytes from p to the DTLS connection
-func (s *Stream) WriteSCTP(p []byte, ppi PayloadProtocolIdentifier) (int, error) {
-	maxMessageSize := s.association.MaxMessageSize()
-	if len(p) > int(maxMessageSize) {
-		return 0, fmt.Errorf("%w: %v", ErrOutboundPacketTooLarge, maxMessageSize)
+func (s *Stream) WriteSCTP(p []byte, ppi PayloadProtocolIdentifier) (n int, err error) {
+	if len(p) > math.MaxUint16 {
+		return 0, errors.Errorf("Outbound packet larger than maximum message size %v", math.MaxUint16)
 	}
 
-	if s.State() != StreamStateOpen {
-		return 0, ErrStreamClosed
+	s.lock.RLock()
+	err = s.writeErr
+	s.lock.RUnlock()
+	if err != nil {
+		return 0, err
 	}
 
 	chunks := s.packetize(p, ppi)
-	n := len(p)
-	err := s.association.sendPayloadData(chunks)
-	if err != nil {
-		return n, ErrStreamClosed
-	}
-	return n, nil
+
+	return len(p), s.association.sendPayloadData(chunks)
 }
 
 func (s *Stream) packetize(raw []byte, ppi PayloadProtocolIdentifier) []*chunkPayloadData {
@@ -294,7 +176,6 @@ func (s *Stream) packetize(raw []byte, ppi PayloadProtocolIdentifier) []*chunkPa
 	unordered := ppi != PayloadTypeWebRTCDCEP && s.unordered
 
 	var chunks []*chunkPayloadData
-	var head *chunkPayloadData
 	for remaining != 0 {
 		fragmentSize := min32(s.association.maxPayloadSize, remaining)
 
@@ -312,11 +193,6 @@ func (s *Stream) packetize(raw []byte, ppi PayloadProtocolIdentifier) []*chunkPa
 			immediateSack:        false,
 			payloadType:          ppi,
 			streamSequenceNumber: s.sequenceNumber,
-			head:                 head,
-		}
-
-		if head == nil {
-			head = chunk
 		}
 
 		chunks = append(chunks, chunk)
@@ -334,7 +210,7 @@ func (s *Stream) packetize(raw []byte, ppi PayloadProtocolIdentifier) []*chunkPa
 	}
 
 	s.bufferedAmount += uint64(len(raw))
-	s.log.Tracef("[%s] bufferedAmount = %d", s.name, s.bufferedAmount)
+	s.log.Tracef("sctp/stream: bufferedAmount = %d", s.bufferedAmount)
 
 	return chunks
 }
@@ -342,29 +218,20 @@ func (s *Stream) packetize(raw []byte, ppi PayloadProtocolIdentifier) []*chunkPa
 // Close closes the write-direction of the stream.
 // Future calls to Write are not permitted after calling Close.
 func (s *Stream) Close() error {
-	if sid, resetOutbound := func() (uint16, bool) {
-		s.lock.Lock()
-		defer s.lock.Unlock()
-
-		s.log.Debugf("[%s] Close: state=%s", s.name, s.state.String())
-
-		if s.state == StreamStateOpen {
-			if s.readErr == nil {
-				s.state = StreamStateClosing
-			} else {
-				s.state = StreamStateClosed
-			}
-			s.log.Debugf("[%s] state change: open => %s", s.name, s.state.String())
-			return s.streamIdentifier, true
-		}
-		return s.streamIdentifier, false
-	}(); resetOutbound {
-		// Reset the outgoing stream
-		// https://tools.ietf.org/html/rfc6525
-		return s.association.sendResetRequest(sid)
+	s.lock.Lock()
+	if s.writeErr != nil {
+		s.lock.Unlock()
+		return nil // already closed
 	}
+	s.writeErr = errors.New("Stream closed")
 
-	return nil
+	a := s.association
+	sid := s.streamIdentifier
+	s.lock.Unlock()
+
+	// Reset the outgoing stream
+	// https://tools.ietf.org/html/rfc6525
+	return a.sendResetRequest(sid)
 }
 
 // BufferedAmount returns the number of bytes of data currently queued to be sent over this stream.
@@ -405,25 +272,18 @@ func (s *Stream) OnBufferedAmountLow(f func()) {
 // This method is called by association's readLoop (go-)routine to notify this stream
 // of the specified amount of outgoing data has been delivered to the peer.
 func (s *Stream) onBufferReleased(nBytesReleased int) {
-	if nBytesReleased <= 0 {
-		return
-	}
-
 	s.lock.Lock()
-
-	fromAmount := s.bufferedAmount
 
 	if s.bufferedAmount < uint64(nBytesReleased) {
 		s.bufferedAmount = 0
-		s.log.Errorf("[%s] released buffer size %d should be <= %d",
-			s.name, nBytesReleased, s.bufferedAmount)
+		s.log.Errorf("released buffer size %d should be <= %d", nBytesReleased, s.bufferedAmount)
 	} else {
 		s.bufferedAmount -= uint64(nBytesReleased)
 	}
 
-	s.log.Tracef("[%s] bufferedAmount = %d", s.name, s.bufferedAmount)
+	s.log.Tracef("sctp/stream: bufferedAmount = %d", s.bufferedAmount)
 
-	if s.onBufferedAmountLow != nil && fromAmount > s.bufferedAmountLow && s.bufferedAmount <= s.bufferedAmountLow {
+	if s.onBufferedAmountLow != nil && s.bufferedAmount < s.bufferedAmountLow {
 		f := s.onBufferedAmountLow
 		s.lock.Unlock()
 		f()
@@ -431,41 +291,4 @@ func (s *Stream) onBufferReleased(nBytesReleased int) {
 	}
 
 	s.lock.Unlock()
-}
-
-func (s *Stream) getNumBytesInReassemblyQueue() int {
-	// No lock is required as it reads the size with atomic load function.
-	return s.reassemblyQueue.getNumBytes()
-}
-
-func (s *Stream) onInboundStreamReset() {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	s.log.Debugf("[%s] onInboundStreamReset: state=%s", s.name, s.state.String())
-
-	// No more inbound data to read. Unblock the read with io.EOF.
-	// This should cause DCEP layer (datachannel package) to call Close() which
-	// will reset outgoing stream also.
-
-	// See RFC 8831 section 6.7:
-	//	if one side decides to close the data channel, it resets the corresponding
-	//	outgoing stream.  When the peer sees that an incoming stream was
-	//	reset, it also resets its corresponding outgoing stream.  Once this
-	//	is completed, the data channel is closed.
-
-	s.readErr = io.EOF
-	s.readNotifier.Broadcast()
-
-	if s.state == StreamStateClosing {
-		s.log.Debugf("[%s] state change: closing => closed", s.name)
-		s.state = StreamStateClosed
-	}
-}
-
-// State return the stream state.
-func (s *Stream) State() StreamState {
-	s.lock.RLock()
-	defer s.lock.RUnlock()
-	return s.state
 }

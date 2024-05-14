@@ -1,11 +1,9 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
-// SPDX-License-Identifier: MIT
-
 package sctp
 
 import (
-	"errors"
 	"fmt"
+
+	"github.com/pkg/errors"
 )
 
 // https://tools.ietf.org/html/rfc6525#section-3.1
@@ -31,20 +29,13 @@ type chunkReconfig struct {
 	paramB param
 }
 
-// Reconfigure chunk errors
-var (
-	ErrChunkParseParamTypeFailed        = errors.New("failed to parse param type")
-	ErrChunkMarshalParamAReconfigFailed = errors.New("unable to marshal parameter A for reconfig")
-	ErrChunkMarshalParamBReconfigFailed = errors.New("unable to marshal parameter B for reconfig")
-)
-
 func (c *chunkReconfig) unmarshal(raw []byte) error {
 	if err := c.chunkHeader.unmarshal(raw); err != nil {
 		return err
 	}
 	pType, err := parseParamType(c.raw)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrChunkParseParamTypeFailed, err) //nolint:errorlint
+		return errors.Wrap(err, "failed to parse param type")
 	}
 	a, err := buildParam(pType, c.raw)
 	if err != nil {
@@ -57,7 +48,7 @@ func (c *chunkReconfig) unmarshal(raw []byte) error {
 	if len(c.raw) > offset {
 		pType, err := parseParamType(c.raw[offset:])
 		if err != nil {
-			return fmt.Errorf("%w: %v", ErrChunkParseParamTypeFailed, err) //nolint:errorlint
+			return errors.Wrap(err, "failed to parse param type")
 		}
 		b, err := buildParam(pType, c.raw[offset:])
 		if err != nil {
@@ -72,7 +63,7 @@ func (c *chunkReconfig) unmarshal(raw []byte) error {
 func (c *chunkReconfig) marshal() ([]byte, error) {
 	out, err := c.paramA.marshal()
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrChunkMarshalParamAReconfigFailed, err) //nolint:errorlint
+		return nil, errors.Wrap(err, "Unable to marshal parameter A for reconfig")
 	}
 	if c.paramB != nil {
 		// Pad param A
@@ -80,7 +71,7 @@ func (c *chunkReconfig) marshal() ([]byte, error) {
 
 		outB, err := c.paramB.marshal()
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrChunkMarshalParamBReconfigFailed, err) //nolint:errorlint
+			return nil, errors.Wrap(err, "Unable to marshal parameter B for reconfig")
 		}
 
 		out = append(out, outB...)
@@ -92,7 +83,6 @@ func (c *chunkReconfig) marshal() ([]byte, error) {
 }
 
 func (c *chunkReconfig) check() (abort bool, err error) {
-	// nolint:godox
 	// TODO: check allowed combinations:
 	// https://tools.ietf.org/html/rfc6525#section-3.1
 	return true, nil
@@ -102,7 +92,7 @@ func (c *chunkReconfig) check() (abort bool, err error) {
 func (c *chunkReconfig) String() string {
 	res := fmt.Sprintf("Param A:\n %s", c.paramA)
 	if c.paramB != nil {
-		res += fmt.Sprintf("Param B:\n %s", c.paramB)
+		res = res + fmt.Sprintf("Param B:\n %s", c.paramB)
 	}
 	return res
 }

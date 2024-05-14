@@ -1,19 +1,12 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
-// SPDX-License-Identifier: MIT
-
-// Package datachannel implements WebRTC Data Channels
 package datachannel
 
 import (
-	"errors"
 	"fmt"
 	"io"
-	"sync"
-	"sync/atomic"
-	"time"
 
 	"github.com/pion/logging"
 	"github.com/pion/sctp"
+	"github.com/pkg/errors"
 )
 
 const receiveMTU = 8192
@@ -22,11 +15,6 @@ const receiveMTU = 8192
 // that also returns if the message is text.
 type Reader interface {
 	ReadDataChannel([]byte) (int, bool, error)
-}
-
-// ReadDeadliner extends an io.Reader to expose setting a read deadline.
-type ReadDeadliner interface {
-	SetReadDeadline(time.Time) error
 }
 
 // Writer is an extended io.Writer
@@ -48,17 +36,6 @@ type ReadWriteCloser interface {
 // DataChannel represents a data channel
 type DataChannel struct {
 	Config
-
-	// stats
-	messagesSent     uint32
-	messagesReceived uint32
-	bytesSent        uint64
-	bytesReceived    uint64
-
-	mu                      sync.Mutex
-	onOpenCompleteHandler   func()
-	openCompleteHandlerOnce sync.Once
-
 	stream *sctp.Stream
 	log    logging.LeveledLogger
 }
@@ -66,20 +43,35 @@ type DataChannel struct {
 // Config is used to configure the data channel.
 type Config struct {
 	ChannelType          ChannelType
-	Negotiated           bool
 	Priority             uint16
 	ReliabilityParameter uint32
 	Label                string
-	Protocol             string
 	LoggerFactory        logging.LoggerFactory
 }
 
-func newDataChannel(stream *sctp.Stream, config *Config) *DataChannel {
+func newDataChannel(stream *sctp.Stream, config *Config) (*DataChannel, error) {
+	switch config.ChannelType {
+	case ChannelTypeReliable:
+		stream.SetReliabilityParams(false, sctp.ReliabilityTypeReliable, config.ReliabilityParameter)
+	case ChannelTypeReliableUnordered:
+		stream.SetReliabilityParams(true, sctp.ReliabilityTypeReliable, config.ReliabilityParameter)
+	case ChannelTypePartialReliableRexmit:
+		stream.SetReliabilityParams(false, sctp.ReliabilityTypeRexmit, config.ReliabilityParameter)
+	case ChannelTypePartialReliableRexmitUnordered:
+		stream.SetReliabilityParams(true, sctp.ReliabilityTypeRexmit, config.ReliabilityParameter)
+	case ChannelTypePartialReliableTimed:
+		stream.SetReliabilityParams(false, sctp.ReliabilityTypeTimed, config.ReliabilityParameter)
+	case ChannelTypePartialReliableTimedUnordered:
+		stream.SetReliabilityParams(true, sctp.ReliabilityTypeTimed, config.ReliabilityParameter)
+	default:
+		return nil, fmt.Errorf("unable to create datachannel, invalid ChannelType: %v ", config.ChannelType)
+	}
+
 	return &DataChannel{
 		Config: *config,
 		stream: stream,
 		log:    config.LoggerFactory.NewLogger("datachannel"),
-	}
+	}, nil
 }
 
 // Dial opens a data channels over SCTP
@@ -105,38 +97,27 @@ func Client(stream *sctp.Stream, config *Config) (*DataChannel, error) {
 		ReliabilityParameter: config.ReliabilityParameter,
 
 		Label:    []byte(config.Label),
-		Protocol: []byte(config.Protocol),
+		Protocol: []byte(""),
 	}
 
-	if !config.Negotiated {
-		rawMsg, err := msg.Marshal()
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal ChannelOpen %w", err)
-		}
-
-		if _, err = stream.WriteSCTP(rawMsg, sctp.PayloadTypeWebRTCDCEP); err != nil {
-			return nil, fmt.Errorf("failed to send ChannelOpen %w", err)
-		}
+	rawMsg, err := msg.Marshal()
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal ChannelOpen %v", err)
 	}
-	dc := newDataChannel(stream, config)
 
-	if err := dc.commitReliabilityParams(); err != nil {
-		return nil, err
+	_, err = stream.WriteSCTP(rawMsg, sctp.PayloadTypeWebRTCDCEP)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send ChannelOpen %v", err)
 	}
-	return dc, nil
+
+	return newDataChannel(stream, config)
 }
 
 // Accept is used to accept incoming data channels over SCTP
-func Accept(a *sctp.Association, config *Config, existingChannels ...*DataChannel) (*DataChannel, error) {
+func Accept(a *sctp.Association, config *Config) (*DataChannel, error) {
 	stream, err := a.AcceptStream()
 	if err != nil {
 		return nil, err
-	}
-	for _, ch := range existingChannels {
-		if ch.StreamIdentifier() == stream.StreamIdentifier() {
-			ch.stream.SetDefaultPayloadType(sctp.PayloadTypeWebRTCBinary)
-			return ch, nil
-		}
 	}
 
 	stream.SetDefaultPayloadType(sctp.PayloadTypeWebRTCBinary)
@@ -151,39 +132,37 @@ func Accept(a *sctp.Association, config *Config, existingChannels ...*DataChanne
 
 // Server accepts a data channel over an SCTP stream
 func Server(stream *sctp.Stream, config *Config) (*DataChannel, error) {
-	buffer := make([]byte, receiveMTU)
+	buffer := make([]byte, receiveMTU) // TODO: Can probably be smaller
 	n, ppi, err := stream.ReadSCTP(buffer)
 	if err != nil {
 		return nil, err
 	}
 
 	if ppi != sctp.PayloadTypeWebRTCDCEP {
-		return nil, fmt.Errorf("%w %s", ErrInvalidPayloadProtocolIdentifier, ppi)
+		return nil, fmt.Errorf("unexpected packet type: %s", ppi)
 	}
 
 	openMsg, err := parseExpectDataChannelOpen(buffer[:n])
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse DataChannelOpen packet %w", err)
+		return nil, errors.Wrap(err, "failed to parse DataChannelOpen packet")
 	}
 
 	config.ChannelType = openMsg.ChannelType
 	config.Priority = openMsg.Priority
 	config.ReliabilityParameter = openMsg.ReliabilityParameter
 	config.Label = string(openMsg.Label)
-	config.Protocol = string(openMsg.Protocol)
 
-	dataChannel := newDataChannel(stream, config)
+	dataChannel, err := newDataChannel(stream, config)
+	if err != nil {
+		return nil, err
+	}
 
 	err = dataChannel.writeDataChannelAck()
 	if err != nil {
 		return nil, err
 	}
-
-	err = dataChannel.commitReliabilityParams()
-	if err != nil {
-		return nil, err
-	}
 	return dataChannel, nil
+
 }
 
 // Read reads a packet of len(p) bytes as binary data
@@ -196,10 +175,11 @@ func (c *DataChannel) Read(p []byte) (int, error) {
 func (c *DataChannel) ReadDataChannel(p []byte) (int, bool, error) {
 	for {
 		n, ppi, err := c.stream.ReadSCTP(p)
-		if errors.Is(err, io.EOF) {
+		if err == io.EOF {
 			// When the peer sees that an incoming stream was
 			// reset, it also resets its corresponding outgoing stream.
-			if closeErr := c.stream.Close(); closeErr != nil {
+			closeErr := c.stream.Close()
+			if closeErr != nil {
 				return 0, false, closeErr
 			}
 		}
@@ -207,69 +187,20 @@ func (c *DataChannel) ReadDataChannel(p []byte) (int, bool, error) {
 			return 0, false, err
 		}
 
-		if ppi == sctp.PayloadTypeWebRTCDCEP {
-			if err = c.handleDCEP(p[:n]); err != nil {
+		var isString bool
+		switch ppi {
+		case sctp.PayloadTypeWebRTCDCEP:
+			err = c.handleDCEP(p[:n])
+			if err != nil {
 				c.log.Errorf("Failed to handle DCEP: %s", err.Error())
+				continue
 			}
 			continue
-		} else if ppi == sctp.PayloadTypeWebRTCBinaryEmpty || ppi == sctp.PayloadTypeWebRTCStringEmpty {
-			n = 0
+		case sctp.PayloadTypeWebRTCString, sctp.PayloadTypeWebRTCStringEmpty:
+			isString = true
 		}
-
-		atomic.AddUint32(&c.messagesReceived, 1)
-		atomic.AddUint64(&c.bytesReceived, uint64(n))
-
-		isString := ppi == sctp.PayloadTypeWebRTCString || ppi == sctp.PayloadTypeWebRTCStringEmpty
 		return n, isString, err
 	}
-}
-
-// SetReadDeadline sets a deadline for reads to return
-func (c *DataChannel) SetReadDeadline(t time.Time) error {
-	return c.stream.SetReadDeadline(t)
-}
-
-// MessagesSent returns the number of messages sent
-func (c *DataChannel) MessagesSent() uint32 {
-	return atomic.LoadUint32(&c.messagesSent)
-}
-
-// MessagesReceived returns the number of messages received
-func (c *DataChannel) MessagesReceived() uint32 {
-	return atomic.LoadUint32(&c.messagesReceived)
-}
-
-// OnOpen sets an event handler which is invoked when
-// a DATA_CHANNEL_ACK message is received.
-// The handler is called only on thefor the channel opened
-// https://datatracker.ietf.org/doc/html/draft-ietf-rtcweb-data-protocol-09#section-5.2
-func (c *DataChannel) OnOpen(f func()) {
-	c.mu.Lock()
-	c.openCompleteHandlerOnce = sync.Once{}
-	c.onOpenCompleteHandler = f
-	c.mu.Unlock()
-}
-
-func (c *DataChannel) onOpenComplete() {
-	c.mu.Lock()
-	hdlr := c.onOpenCompleteHandler
-	c.mu.Unlock()
-
-	if hdlr != nil {
-		go c.openCompleteHandlerOnce.Do(func() {
-			hdlr()
-		})
-	}
-}
-
-// BytesSent returns the number of bytes sent
-func (c *DataChannel) BytesSent() uint64 {
-	return atomic.LoadUint64(&c.bytesSent)
-}
-
-// BytesReceived returns the number of bytes received
-func (c *DataChannel) BytesReceived() uint64 {
-	return atomic.LoadUint64(&c.bytesReceived)
 }
 
 // StreamIdentifier returns the Stream identifier associated to the stream.
@@ -280,14 +211,23 @@ func (c *DataChannel) StreamIdentifier() uint16 {
 func (c *DataChannel) handleDCEP(data []byte) error {
 	msg, err := parse(data)
 	if err != nil {
-		return fmt.Errorf("failed to parse DataChannel packet %w", err)
+		return errors.Wrap(err, "Failed to parse DataChannel packet")
 	}
 
 	switch msg := msg.(type) {
+	case *channelOpen:
+		err = c.writeDataChannelAck()
+		if err != nil {
+			return fmt.Errorf("failed to ACK channel open: %v", err)
+		}
+		// TODO: Should not happen?
+
 	case *channelAck:
-		c.onOpenComplete()
+		// TODO: handle ChannelAck (https://tools.ietf.org/html/draft-ietf-rtcweb-data-protocol-09#section-5.2)
+		// TODO: handle?
+
 	default:
-		return fmt.Errorf("%w, wanted ACK got %v", ErrUnexpectedDataChannelType, msg)
+		return fmt.Errorf("unhandled DataChannel message %v", msg)
 	}
 
 	return nil
@@ -319,13 +259,6 @@ func (c *DataChannel) WriteDataChannel(p []byte, isString bool) (n int, err erro
 		ppi = sctp.PayloadTypeWebRTCStringEmpty
 	}
 
-	atomic.AddUint32(&c.messagesSent, 1)
-	atomic.AddUint64(&c.bytesSent, uint64(len(p)))
-
-	if len(p) == 0 {
-		_, err := c.stream.WriteSCTP([]byte{0}, ppi)
-		return 0, err
-	}
 	return c.stream.WriteSCTP(p, ppi)
 }
 
@@ -333,11 +266,12 @@ func (c *DataChannel) writeDataChannelAck() error {
 	ack := channelAck{}
 	ackMsg, err := ack.Marshal()
 	if err != nil {
-		return fmt.Errorf("failed to marshal ChannelOpen ACK: %w", err)
+		return fmt.Errorf("failed to marshal ChannelOpen ACK: %v", err)
 	}
 
-	if _, err = c.stream.WriteSCTP(ackMsg, sctp.PayloadTypeWebRTCDCEP); err != nil {
-		return fmt.Errorf("failed to send ChannelOpen ACK: %w", err)
+	_, err = c.stream.WriteSCTP(ackMsg, sctp.PayloadTypeWebRTCDCEP)
+	if err != nil {
+		return fmt.Errorf("failed to send ChannelOpen ACK: %v", err)
 	}
 
 	return err
@@ -381,24 +315,4 @@ func (c *DataChannel) SetBufferedAmountLowThreshold(th uint64) {
 // number of bytes of outgoing data buffered is lower than the threshold.
 func (c *DataChannel) OnBufferedAmountLow(f func()) {
 	c.stream.OnBufferedAmountLow(f)
-}
-
-func (c *DataChannel) commitReliabilityParams() error {
-	switch c.Config.ChannelType {
-	case ChannelTypeReliable:
-		c.stream.SetReliabilityParams(false, sctp.ReliabilityTypeReliable, c.Config.ReliabilityParameter)
-	case ChannelTypeReliableUnordered:
-		c.stream.SetReliabilityParams(true, sctp.ReliabilityTypeReliable, c.Config.ReliabilityParameter)
-	case ChannelTypePartialReliableRexmit:
-		c.stream.SetReliabilityParams(false, sctp.ReliabilityTypeRexmit, c.Config.ReliabilityParameter)
-	case ChannelTypePartialReliableRexmitUnordered:
-		c.stream.SetReliabilityParams(true, sctp.ReliabilityTypeRexmit, c.Config.ReliabilityParameter)
-	case ChannelTypePartialReliableTimed:
-		c.stream.SetReliabilityParams(false, sctp.ReliabilityTypeTimed, c.Config.ReliabilityParameter)
-	case ChannelTypePartialReliableTimedUnordered:
-		c.stream.SetReliabilityParams(true, sctp.ReliabilityTypeTimed, c.Config.ReliabilityParameter)
-	default:
-		return fmt.Errorf("%w %v", ErrInvalidChannelType, c.Config.ChannelType)
-	}
-	return nil
 }

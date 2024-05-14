@@ -1,12 +1,10 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
-// SPDX-License-Identifier: MIT
-
 package sctp
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
+
+	"github.com/pkg/errors"
 )
 
 /*
@@ -49,13 +47,6 @@ type gapAckBlock struct {
 	end   uint16
 }
 
-// Selective ack chunk errors
-var (
-	ErrChunkTypeNotSack           = errors.New("ChunkType is not of type SACK")
-	ErrSackSizeNotLargeEnoughInfo = errors.New("SACK Chunk size is not large enough to contain header")
-	ErrSackSizeNotMatchPredicted  = errors.New("SACK Chunk size does not match predicted amount from header values")
-)
-
 // String makes gapAckBlock printable
 func (g gapAckBlock) String() string {
 	return fmt.Sprintf("%d - %d", g.start, g.end)
@@ -79,11 +70,11 @@ func (s *chunkSelectiveAck) unmarshal(raw []byte) error {
 	}
 
 	if s.typ != ctSack {
-		return fmt.Errorf("%w: actually is %s", ErrChunkTypeNotSack, s.typ.String())
+		return errors.Errorf("ChunkType is not of type SACK, actually is %s", s.typ.String())
 	}
 
 	if len(s.raw) < selectiveAckHeaderSize {
-		return fmt.Errorf("%w: %v remaining, needs %v bytes", ErrSackSizeNotLargeEnoughInfo,
+		return errors.Errorf("SACK Chunk size is not large enough to contain header (%v remaining, needs %v bytes)",
 			len(s.raw), selectiveAckHeaderSize)
 	}
 
@@ -93,7 +84,7 @@ func (s *chunkSelectiveAck) unmarshal(raw []byte) error {
 	s.duplicateTSN = make([]uint32, binary.BigEndian.Uint16(s.raw[10:]))
 
 	if len(s.raw) != selectiveAckHeaderSize+(4*len(s.gapAckBlocks)+(4*len(s.duplicateTSN))) {
-		return ErrSackSizeNotMatchPredicted
+		return errors.Errorf("SACK Chunk size does not match predicted amount from header values")
 	}
 
 	offset := selectiveAckHeaderSize
@@ -138,13 +129,10 @@ func (s *chunkSelectiveAck) check() (abort bool, err error) {
 
 // String makes chunkSelectiveAck printable
 func (s *chunkSelectiveAck) String() string {
-	res := fmt.Sprintf("SACK cumTsnAck=%d arwnd=%d dupTsn=%d",
-		s.cumulativeTSNAck,
-		s.advertisedReceiverWindowCredit,
-		s.duplicateTSN)
+	res := fmt.Sprintf("%s\n%d", s.chunkHeader, s.cumulativeTSNAck)
 
 	for _, gap := range s.gapAckBlocks {
-		res = fmt.Sprintf("%s\n gap ack: %s", res, gap)
+		res = fmt.Sprintf("\n gap ack: %s", gap)
 	}
 
 	return res

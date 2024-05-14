@@ -1,12 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
-// SPDX-License-Identifier: MIT
-
 package rtcp
-
-import (
-	"fmt"
-	"strings"
-)
 
 // A CompoundPacket is a collection of RTCP packets transmitted as a single packet with
 // the underlying protocol (for example UDP).
@@ -21,6 +13,8 @@ import (
 //
 // Other RTCP packet types may follow in any order. Packet types may appear more than once.
 type CompoundPacket []Packet
+
+var _ Packet = (*CompoundPacket)(nil) // assert is a Packet
 
 // Validate returns an error if this is not an RFC-compliant CompoundPacket.
 func (c CompoundPacket) Validate() error {
@@ -72,51 +66,21 @@ func (c CompoundPacket) Validate() error {
 	return errMissingCNAME
 }
 
-// CNAME returns the CNAME that *must* be present in every CompoundPacket
-func (c CompoundPacket) CNAME() (string, error) {
-	var err error
-
-	if len(c) < 1 {
-		return "", errEmptyCompound
-	}
-
-	for _, pkt := range c[1:] {
-		sdes, ok := pkt.(*SourceDescription)
-		if ok {
-			for _, c := range sdes.Chunks {
-				for _, it := range c.Items {
-					if it.Type == SDESCNAME {
-						return it.Text, err
-					}
-				}
-			}
-		} else {
-			_, ok := pkt.(*ReceiverReport)
-			if !ok {
-				err = errPacketBeforeCNAME
-			}
-		}
-	}
-	return "", errMissingCNAME
-}
-
 // Marshal encodes the CompoundPacket as binary.
 func (c CompoundPacket) Marshal() ([]byte, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
 
-	p := []Packet(c)
-	return Marshal(p)
-}
-
-// MarshalSize returns the size of the packet once marshaled
-func (c CompoundPacket) MarshalSize() int {
-	l := 0
+	out := make([]byte, 0)
 	for _, p := range c {
-		l += p.MarshalSize()
+		data, err := p.Marshal()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, data...)
 	}
-	return l
+	return out, nil
 }
 
 // Unmarshal decodes a CompoundPacket from binary.
@@ -124,6 +88,7 @@ func (c *CompoundPacket) Unmarshal(rawData []byte) error {
 	out := make(CompoundPacket, 0)
 	for len(rawData) != 0 {
 		p, processed, err := unmarshal(rawData)
+
 		if err != nil {
 			return err
 		}
@@ -133,7 +98,11 @@ func (c *CompoundPacket) Unmarshal(rawData []byte) error {
 	}
 	*c = out
 
-	return c.Validate()
+	if err := c.Validate(); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // DestinationSSRC returns the synchronization sources associated with this
@@ -144,18 +113,4 @@ func (c CompoundPacket) DestinationSSRC() []uint32 {
 	}
 
 	return c[0].DestinationSSRC()
-}
-
-func (c CompoundPacket) String() string {
-	out := "CompoundPacket\n"
-	for _, p := range c {
-		stringer, canString := p.(fmt.Stringer)
-		if canString {
-			out += stringer.String()
-		} else {
-			out += stringify(p)
-		}
-	}
-	out = strings.TrimSuffix(strings.ReplaceAll(out, "\n", "\n\t"), "\t")
-	return out
 }

@@ -1,51 +1,43 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
-// SPDX-License-Identifier: MIT
-
-package sctp // nolint:dupl
+package sctp
 
 import (
-	"errors"
 	"fmt"
+
+	"github.com/pkg/errors"
 )
 
 /*
-Operation Error (ERROR) (9)
+   Operation Error (ERROR) (9)
 
-An endpoint sends this chunk to its peer endpoint to notify it of
-certain error conditions.  It contains one or more error causes.  An
-Operation Error is not considered fatal in and of itself, but may be
-used with an ERROR chunk to report a fatal condition.  It has the
-following parameters:
+   An endpoint sends this chunk to its peer endpoint to notify it of
+   certain error conditions.  It contains one or more error causes.  An
+   Operation Error is not considered fatal in and of itself, but may be
+   used with an ERROR chunk to report a fatal condition.  It has the
+   following parameters:
 
-	 0                   1                   2                   3
-	 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-	|   Type = 9    | Chunk  Flags  |           Length              |
-	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-	\                                                               \
-	/                    one or more Error Causes                   /
-	\                                                               \
-	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        0                   1                   2                   3
+        0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       |   Type = 9    | Chunk  Flags  |           Length              |
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       \                                                               \
+       /                    one or more Error Causes                   /
+       \                                                               \
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
-Chunk Flags: 8 bits
+   Chunk Flags: 8 bits
 
-	Set to 0 on transmit and ignored on receipt.
+      Set to 0 on transmit and ignored on receipt.
 
-Length: 16 bits (unsigned integer)
+   Length: 16 bits (unsigned integer)
 
-	Set to the size of the chunk in bytes, including the chunk header
-	and all the Error Cause fields present.
+      Set to the size of the chunk in bytes, including the chunk header
+      and all the Error Cause fields present.
 */
 type chunkError struct {
 	chunkHeader
 	errorCauses []errorCause
 }
-
-// Error chunk errors
-var (
-	ErrChunkTypeNotCtError   = errors.New("ChunkType is not of type ctError")
-	ErrBuildErrorChunkFailed = errors.New("failed build Error Chunk")
-)
 
 func (a *chunkError) unmarshal(raw []byte) error {
 	if err := a.chunkHeader.unmarshal(raw); err != nil {
@@ -53,7 +45,7 @@ func (a *chunkError) unmarshal(raw []byte) error {
 	}
 
 	if a.typ != ctError {
-		return fmt.Errorf("%w, actually is %s", ErrChunkTypeNotCtError, a.typ.String())
+		return errors.Errorf("ChunkType is not of type ctError, actually is %s", a.typ.String())
 	}
 
 	offset := chunkHeaderSize
@@ -64,7 +56,7 @@ func (a *chunkError) unmarshal(raw []byte) error {
 
 		e, err := buildErrorCause(raw[offset:])
 		if err != nil {
-			return fmt.Errorf("%w: %v", ErrBuildErrorChunkFailed, err) //nolint:errorlint
+			return errors.Wrap(err, "Failed build Error Chunk")
 		}
 
 		offset += int(e.length())
@@ -72,7 +64,6 @@ func (a *chunkError) unmarshal(raw []byte) error {
 	}
 	return nil
 }
-
 func (a *chunkError) marshal() ([]byte, error) {
 	a.chunkHeader.typ = ctError
 	a.flags = 0x00

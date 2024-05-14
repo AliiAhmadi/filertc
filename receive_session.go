@@ -5,7 +5,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/pion/webrtc/v4"
+	"github.com/pion/webrtc/v2"
 	"github.com/sirupsen/logrus"
 )
 

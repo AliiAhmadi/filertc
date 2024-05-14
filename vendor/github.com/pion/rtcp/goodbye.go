@@ -1,11 +1,7 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
-// SPDX-License-Identifier: MIT
-
 package rtcp
 
 import (
 	"encoding/binary"
-	"fmt"
 )
 
 // The Goodbye packet indicates that one or more sources are no longer active.
@@ -15,6 +11,8 @@ type Goodbye struct {
 	// Optional text indicating the reason for leaving, e.g., "camera malfunction" or "RTP loop detected"
 	Reason string
 }
+
+var _ Packet = (*Goodbye)(nil) // assert is a Packet
 
 // Marshal encodes the Goodbye packet in binary
 func (g Goodbye) Marshal() ([]byte, error) {
@@ -32,7 +30,7 @@ func (g Goodbye) Marshal() ([]byte, error) {
 	 *       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 	 */
 
-	rawPacket := make([]byte, g.MarshalSize())
+	rawPacket := make([]byte, g.len())
 	packetBody := rawPacket[headerLength:]
 
 	if len(g.Sources) > countMax {
@@ -115,6 +113,7 @@ func (g *Goodbye) Unmarshal(rawPacket []byte) error {
 		}
 
 		g.Reason = string(rawPacket[reasonOffset+1 : reasonEnd])
+
 	}
 
 	return nil
@@ -126,12 +125,11 @@ func (g *Goodbye) Header() Header {
 		Padding: false,
 		Count:   uint8(len(g.Sources)),
 		Type:    TypeGoodbye,
-		Length:  uint16((g.MarshalSize() / 4) - 1),
+		Length:  uint16((g.len() / 4) - 1),
 	}
 }
 
-// MarshalSize returns the size of the packet once marshaled
-func (g *Goodbye) MarshalSize() int {
+func (g *Goodbye) len() int {
 	srcsLength := len(g.Sources) * ssrcLength
 	reasonLength := len(g.Reason) + 1
 
@@ -145,15 +143,5 @@ func (g *Goodbye) MarshalSize() int {
 func (g *Goodbye) DestinationSSRC() []uint32 {
 	out := make([]uint32, len(g.Sources))
 	copy(out, g.Sources)
-	return out
-}
-
-func (g Goodbye) String() string {
-	out := "Goodbye\n"
-	for i, s := range g.Sources {
-		out += fmt.Sprintf("\tSource %d: %x\n", i, s)
-	}
-	out += fmt.Sprintf("\tReason: %s\n", g.Reason)
-
 	return out
 }

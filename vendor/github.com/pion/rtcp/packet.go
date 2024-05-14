@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
-// SPDX-License-Identifier: MIT
-
 package rtcp
 
 // Packet represents an RTCP packet, a protocol used for out-of-band statistics and control information for an RTP session
@@ -10,7 +7,6 @@ type Packet interface {
 
 	Marshal() ([]byte, error)
 	Unmarshal(rawPacket []byte) error
-	MarshalSize() int
 }
 
 // Unmarshal takes an entire udp datagram (which may consist of multiple RTCP packets) and
@@ -19,10 +15,11 @@ type Packet interface {
 // If this is a reduced-size RTCP packet a feedback packet (Goodbye, SliceLossIndication, etc)
 // will be returned. Otherwise, the underlying type of the returned packet will be
 // CompoundPacket.
-func Unmarshal(rawData []byte) ([]Packet, error) {
+func Unmarshal(rawData []byte) (Packet, error) {
 	var packets []Packet
 	for len(rawData) != 0 {
 		p, processed, err := unmarshal(rawData)
+
 		if err != nil {
 			return nil, err
 		}
@@ -35,23 +32,17 @@ func Unmarshal(rawData []byte) ([]Packet, error) {
 	// Empty packet
 	case 0:
 		return nil, errInvalidHeader
-	// Multiple Packets
+	// Reduced-size RTCP (RFC 5506)
+	case 1:
+		return packets[0], nil
+	// CompoundPacket
 	default:
-		return packets, nil
-	}
-}
-
-// Marshal takes an array of Packets and serializes them to a single buffer
-func Marshal(packets []Packet) ([]byte, error) {
-	out := make([]byte, 0)
-	for _, p := range packets {
-		data, err := p.Marshal()
-		if err != nil {
-			return nil, err
+		p := CompoundPacket(packets)
+		if err := p.Validate(); err != nil {
+			return &p, err
 		}
-		out = append(out, data...)
+		return &p, nil
 	}
-	return out, nil
 }
 
 // unmarshal is a factory which pulls the first RTCP packet from a bytestream,
@@ -65,9 +56,6 @@ func unmarshal(rawData []byte) (packet Packet, bytesprocessed int, err error) {
 	}
 
 	bytesprocessed = int(h.Length+1) * 4
-	if bytesprocessed > len(rawData) {
-		return nil, 0, errPacketTooShort
-	}
 	inPacket := rawData[:bytesprocessed]
 
 	switch h.Type {
@@ -89,10 +77,6 @@ func unmarshal(rawData []byte) (packet Packet, bytesprocessed int, err error) {
 			packet = new(TransportLayerNack)
 		case FormatRRR:
 			packet = new(RapidResynchronizationRequest)
-		case FormatTCC:
-			packet = new(TransportLayerCC)
-		case FormatCCFB:
-			packet = new(CCFeedbackReport)
 		default:
 			packet = new(RawPacket)
 		}
@@ -105,14 +89,9 @@ func unmarshal(rawData []byte) (packet Packet, bytesprocessed int, err error) {
 			packet = new(SliceLossIndication)
 		case FormatREMB:
 			packet = new(ReceiverEstimatedMaximumBitrate)
-		case FormatFIR:
-			packet = new(FullIntraRequest)
 		default:
 			packet = new(RawPacket)
 		}
-
-	case TypeExtendedReport:
-		packet = new(ExtendedReport)
 
 	default:
 		packet = new(RawPacket)

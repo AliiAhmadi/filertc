@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
-// SPDX-License-Identifier: MIT
-
 package rtcp
 
 import (
@@ -36,56 +33,19 @@ type TransportLayerNack struct {
 	Nacks []NackPair
 }
 
-// NackPairsFromSequenceNumbers generates a slice of NackPair from a list of SequenceNumbers
-// This handles generating the proper values for PacketID/LostPackets
-func NackPairsFromSequenceNumbers(sequenceNumbers []uint16) (pairs []NackPair) {
-	if len(sequenceNumbers) == 0 {
-		return []NackPair{}
-	}
+var _ Packet = (*TransportLayerNack)(nil) // assert is a Packet
 
-	nackPair := &NackPair{PacketID: sequenceNumbers[0]}
-	for i := 1; i < len(sequenceNumbers); i++ {
-		m := sequenceNumbers[i]
-
-		if m-nackPair.PacketID > 16 {
-			pairs = append(pairs, *nackPair)
-			nackPair = &NackPair{PacketID: m}
-			continue
-		}
-
-		nackPair.LostPackets |= 1 << (m - nackPair.PacketID - 1)
-	}
-	pairs = append(pairs, *nackPair)
-	return
-}
-
-// Range calls f sequentially for each sequence number covered by n.
-// If f returns false, Range stops the iteration.
-func (n *NackPair) Range(f func(seqno uint16) bool) {
-	more := f(n.PacketID)
-	if !more {
-		return
-	}
-
+// PacketList returns a list of Nack'd packets that's referenced by a NackPair
+func (n *NackPair) PacketList() []uint16 {
+	out := make([]uint16, 1, 17)
+	out[0] = n.PacketID
 	b := n.LostPackets
 	for i := uint16(0); b != 0; i++ {
 		if (b & (1 << i)) != 0 {
 			b &^= (1 << i)
-			more = f(n.PacketID + i + 1)
-			if !more {
-				return
-			}
+			out = append(out, n.PacketID+i+1)
 		}
 	}
-}
-
-// PacketList returns a list of Nack'd packets that's referenced by a NackPair
-func (n *NackPair) PacketList() []uint16 {
-	out := make([]uint16, 0, 17)
-	n.Range(func(seqno uint16) bool {
-		out = append(out, seqno)
-		return true
-	})
 	return out
 }
 
@@ -96,6 +56,7 @@ const (
 
 // Marshal encodes the TransportLayerNack in binary
 func (p TransportLayerNack) Marshal() ([]byte, error) {
+
 	if len(p.Nacks)+tlnLength > math.MaxUint8 {
 		return nil, errTooManyReports
 	}
@@ -135,11 +96,6 @@ func (p *TransportLayerNack) Unmarshal(rawPacket []byte) error {
 		return errWrongType
 	}
 
-	// The FCI field MUST contain at least one and MAY contain more than one Generic NACK
-	if 4*h.Length <= nackOffset {
-		return errBadLength
-	}
-
 	p.SenderSSRC = binary.BigEndian.Uint32(rawPacket[headerLength:])
 	p.MediaSSRC = binary.BigEndian.Uint32(rawPacket[headerLength+ssrcLength:])
 	for i := headerLength + nackOffset; i < (headerLength + int(h.Length*4)); i += 4 {
@@ -151,8 +107,7 @@ func (p *TransportLayerNack) Unmarshal(rawPacket []byte) error {
 	return nil
 }
 
-// MarshalSize returns the size of the packet once marshaled
-func (p *TransportLayerNack) MarshalSize() int {
+func (p *TransportLayerNack) len() int {
 	return headerLength + nackOffset + (len(p.Nacks) * 4)
 }
 
@@ -161,14 +116,14 @@ func (p *TransportLayerNack) Header() Header {
 	return Header{
 		Count:  FormatTLN,
 		Type:   TypeTransportSpecificFeedback,
-		Length: uint16((p.MarshalSize() / 4) - 1),
+		Length: uint16((p.len() / 4) - 1),
 	}
 }
 
 func (p TransportLayerNack) String() string {
 	out := fmt.Sprintf("TransportLayerNack from %x\n", p.SenderSSRC)
 	out += fmt.Sprintf("\tMedia Ssrc %x\n", p.MediaSSRC)
-	out += "\tID\tLostPackets\n"
+	out += fmt.Sprintf("\tID\tLostPackets\n")
 	for _, i := range p.Nacks {
 		out += fmt.Sprintf("\t%d\t%b\n", i.PacketID, i.LostPackets)
 	}

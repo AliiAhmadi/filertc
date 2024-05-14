@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
-// SPDX-License-Identifier: MIT
-
 package rtcp
 
 import (
@@ -41,6 +38,8 @@ type SenderReport struct {
 	// be reported regularly about the sender.
 	ProfileExtensions []byte
 }
+
+var _ Packet = (*SenderReport)(nil) // assert is a Packet
 
 const (
 	srHeaderLength      = 24
@@ -96,7 +95,7 @@ func (r SenderReport) Marshal() ([]byte, error) {
 	 *        +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 	 */
 
-	rawPacket := make([]byte, r.MarshalSize())
+	rawPacket := make([]byte, r.len())
 	packetBody := rawPacket[headerLength:]
 
 	binary.BigEndian.PutUint32(packetBody[srSSRCOffset:], r.SSRC)
@@ -220,16 +219,14 @@ func (r *SenderReport) Unmarshal(rawPacket []byte) error {
 
 // DestinationSSRC returns an array of SSRC values that this packet refers to.
 func (r *SenderReport) DestinationSSRC() []uint32 {
-	out := make([]uint32, len(r.Reports)+1)
+	out := make([]uint32, len(r.Reports))
 	for i, v := range r.Reports {
 		out[i] = v.SSRC
 	}
-	out[len(r.Reports)] = r.SSRC
 	return out
 }
 
-// MarshalSize returns the size of the packet once marshaled
-func (r *SenderReport) MarshalSize() int {
+func (r *SenderReport) len() int {
 	repsLength := 0
 	for _, rep := range r.Reports {
 		repsLength += rep.len()
@@ -242,7 +239,7 @@ func (r *SenderReport) Header() Header {
 	return Header{
 		Count:  uint8(len(r.Reports)),
 		Type:   TypeSenderReport,
-		Length: uint16((r.MarshalSize() / 4) - 1),
+		Length: uint16((r.len() / 4) - 1),
 	}
 }
 
@@ -253,7 +250,7 @@ func (r SenderReport) String() string {
 	out += fmt.Sprintf("\tPacketCount:\t%d\n", r.PacketCount)
 	out += fmt.Sprintf("\tOctetCount:\t%d\n", r.OctetCount)
 
-	out += "\tSSRC    \tLost\tLastSequence\n"
+	out += fmt.Sprintf("\tSSRC    \tLost\tLastSequence\n")
 	for _, i := range r.Reports {
 		out += fmt.Sprintf("\t%x\t%d/%d\t%d\n", i.SSRC, i.FractionLost, i.TotalLost, i.LastSequenceNumber)
 	}

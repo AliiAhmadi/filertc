@@ -1,17 +1,15 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
-// SPDX-License-Identifier: MIT
-
 package datachannel
 
 import (
 	"fmt"
+
+	"github.com/pkg/errors"
 )
 
 // message is a parsed DataChannel message
 type message interface {
 	Marshal() ([]byte, error)
 	Unmarshal([]byte) error
-	String() string
 }
 
 // messageType is the first byte in a DataChannel message that specifies type
@@ -37,7 +35,7 @@ func (t messageType) String() string {
 // parse accepts raw input and returns a DataChannel message
 func parse(raw []byte) (message, error) {
 	if len(raw) == 0 {
-		return nil, ErrDataChannelMessageTooShort
+		return nil, errors.Errorf("DataChannel message is not long enough to determine type ")
 	}
 
 	var msg message
@@ -47,7 +45,7 @@ func parse(raw []byte) (message, error) {
 	case dataChannelAck:
 		msg = &channelAck{}
 	default:
-		return nil, fmt.Errorf("%w %v", ErrInvalidMessageType, messageType(raw[0]))
+		return nil, errors.Errorf("Unknown MessageType %v", messageType(raw[0]))
 	}
 
 	if err := msg.Unmarshal(raw); err != nil {
@@ -61,11 +59,11 @@ func parse(raw []byte) (message, error) {
 // or throws an error
 func parseExpectDataChannelOpen(raw []byte) (*channelOpen, error) {
 	if len(raw) == 0 {
-		return nil, ErrDataChannelMessageTooShort
+		return nil, errors.Errorf("the DataChannel message is not long enough to determine type")
 	}
 
 	if actualTyp := messageType(raw[0]); actualTyp != dataChannelOpen {
-		return nil, fmt.Errorf("%w expected(%s) actual(%s)", ErrUnexpectedDataChannelType, actualTyp, dataChannelOpen)
+		return nil, errors.Errorf("expected DataChannelOpen but got %s", actualTyp)
 	}
 
 	msg := &channelOpen{}
@@ -75,3 +73,22 @@ func parseExpectDataChannelOpen(raw []byte) (*channelOpen, error) {
 
 	return msg, nil
 }
+
+// parseExpectDataChannelAck parses a DataChannelAck message
+// or throws an error
+// func parseExpectDataChannelAck(raw []byte) (*channelAck, error) {
+// 	if len(raw) == 0 {
+// 		return nil, errors.Errorf("the DataChannel message is not long enough to determine type")
+// 	}
+//
+// 	if actualTyp := messageType(raw[0]); actualTyp != dataChannelAck {
+// 		return nil, errors.Errorf("expected DataChannelAck but got %s", actualTyp)
+// 	}
+//
+// 	msg := &channelAck{}
+// 	if err := msg.Unmarshal(raw); err != nil {
+// 		return nil, err
+// 	}
+//
+// 	return msg, nil
+// }

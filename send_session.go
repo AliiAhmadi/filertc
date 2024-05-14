@@ -6,7 +6,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/pion/webrtc/v4"
+	"github.com/pion/webrtc/v2"
 	"github.com/sirupsen/logrus"
 )
 
@@ -43,12 +43,10 @@ type outputMsg struct {
 func newSendSession(c sendConfig) *sendSession {
 	s := &sendSession{
 		sess: inSession{
-			sdpInput:  c.SDPProvider,
-			sdpOutput: c.SDPOutput,
-			Done:      make(chan struct{}),
-			NetworkStats: &stats{
-				lock: &sync.RWMutex{},
-			},
+			sdpInput:     c.SDPProvider,
+			sdpOutput:    c.SDPOutput,
+			Done:         make(chan struct{}),
+			NetworkStats: newStats(),
 			stunServers:  []string{fmt.Sprintf("stun:%s", c.STUN)},
 			onCompletion: func() {},
 		},
@@ -229,7 +227,7 @@ func (s *inSession) createSessionDescription(d webrtc.SessionDescription) error 
 	return nil
 }
 
-func (s *sendSession) Initialize() error {
+func (s *sendSession) initialize() error {
 	if s.initialized {
 		return nil
 	}
@@ -267,8 +265,8 @@ func (s *sendSession) readFile() {
 		s.dataBuff = s.dataBuff[:cap(s.dataBuff)]
 		n, err := s.stream.Read(s.dataBuff)
 		if err != nil {
-			switch err {
-			case io.EOF:
+			switch {
+			case err == io.EOF:
 				s.readingStats.stop()
 				logrus.Debugf("Got EOF after %v bytes!\n", s.readingStats.bytes())
 			default:
@@ -306,7 +304,7 @@ func (s *inSession) readSDP() error {
 
 // TODO
 func (s *sendSession) start() error {
-	if err := s.Initialize(); err != nil {
+	if err := s.initialize(); err != nil {
 		return err
 	}
 

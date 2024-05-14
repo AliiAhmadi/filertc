@@ -1,51 +1,47 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
-// SPDX-License-Identifier: MIT
-
 package rtp
 
 import (
+	"math/rand"
 	"time"
 )
 
 // Payloader payloads a byte array for use as rtp.Packet payloads
 type Payloader interface {
-	Payload(mtu uint16, payload []byte) [][]byte
+	Payload(mtu int, payload []byte) [][]byte
 }
 
 // Packetizer packetizes a payload
 type Packetizer interface {
 	Packetize(payload []byte, samples uint32) []*Packet
-	GeneratePadding(samples uint32) []*Packet
 	EnableAbsSendTime(value int)
-	SkipSamples(skippedSamples uint32)
 }
 
 type packetizer struct {
-	MTU         uint16
-	PayloadType uint8
-	SSRC        uint32
-	Payloader   Payloader
-	Sequencer   Sequencer
-	Timestamp   uint32
-
-	// Deprecated: will be removed in a future version.
-	ClockRate uint32
-
-	extensionNumbers struct { // put extension numbers in here. If they're 0, the extension is disabled (0 is not a legal extension number)
-		AbsSendTime int // http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time
+	MTU              int
+	PayloadType      uint8
+	SSRC             uint32
+	Payloader        Payloader
+	Sequencer        Sequencer
+	Timestamp        uint32
+	ClockRate        uint32
+	extensionNumbers struct { //put extension numbers in here. If they're 0, the extension is disabled (0 is not a legal extension number)
+		AbsSendTime int //http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time
 	}
 	timegen func() time.Time
 }
 
 // NewPacketizer returns a new instance of a Packetizer for a specific payloader
-func NewPacketizer(mtu uint16, pt uint8, ssrc uint32, payloader Payloader, sequencer Sequencer, clockRate uint32) Packetizer {
+func NewPacketizer(mtu int, pt uint8, ssrc uint32, payloader Payloader, sequencer Sequencer, clockRate uint32) Packetizer {
+	rs := rand.NewSource(time.Now().UnixNano())
+	r := rand.New(rs)
+
 	return &packetizer{
 		MTU:         mtu,
 		PayloadType: pt,
 		SSRC:        ssrc,
 		Payloader:   payloader,
 		Sequencer:   sequencer,
-		Timestamp:   globalMathRandomGenerator.Uint32(),
+		Timestamp:   r.Uint32(),
 		ClockRate:   clockRate,
 		timegen:     time.Now,
 	}
@@ -53,6 +49,20 @@ func NewPacketizer(mtu uint16, pt uint8, ssrc uint32, payloader Payloader, seque
 
 func (p *packetizer) EnableAbsSendTime(value int) {
 	p.extensionNumbers.AbsSendTime = value
+}
+
+func toNtpTime(t time.Time) uint64 {
+	var s uint64
+	var f uint64
+	u := uint64(t.UnixNano())
+	s = u / 1e9
+	s += 0x83AA7E80 //offset in seconds between unix epoch and ntp epoch
+	f = u % 1e9
+	f <<= 32
+	f /= 1e9
+	s <<= 32
+
+	return s | f
 }
 
 // Packetize packetizes the payload of an RTP packet and returns one or more RTP packets
@@ -76,7 +86,6 @@ func (p *packetizer) Packetize(payload []byte, samples uint32) []*Packet {
 				SequenceNumber: p.Sequencer.NextSequenceNumber(),
 				Timestamp:      p.Timestamp, // Figure out how to do timestamps
 				SSRC:           p.SSRC,
-				CSRC:           []uint32{},
 			},
 			Payload: pp,
 		}
@@ -84,55 +93,26 @@ func (p *packetizer) Packetize(payload []byte, samples uint32) []*Packet {
 	p.Timestamp += samples
 
 	if len(packets) != 0 && p.extensionNumbers.AbsSendTime != 0 {
-		sendTime := NewAbsSendTimeExtension(p.timegen())
-		// apply http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time
-		b, err := sendTime.Marshal()
-		if err != nil {
-			return nil // never happens
+		t := toNtpTime(p.timegen()) >> 14
+		//apply http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time
+		packets[len(packets)-1].Header.Extension = true
+		packets[len(packets)-1].ExtensionProfile = 0xBEDE
+		packets[len(packets)-1].ExtensionPayload = []byte{
+			//the first byte is
+			// 0 1 2 3 4 5 6 7
+			//+-+-+-+-+-+-+-+-+
+			//|  ID   |  len  |
+			//+-+-+-+-+-+-+-+-+
+			//per RFC 5285
+			//Len is the number of bytes in the extension - 1
+
+			byte((p.extensionNumbers.AbsSendTime << 4) | 2),
+			byte(t & 0xFF0000 >> 16),
+			byte(t & 0xFF00 >> 8),
+			byte(t & 0xFF),
 		}
-		err = packets[len(packets)-1].SetExtension(uint8(p.extensionNumbers.AbsSendTime), b)
-		if err != nil {
-			return nil // never happens
-		}
+
 	}
 
 	return packets
-}
-
-// GeneratePadding returns required padding-only packages
-func (p *packetizer) GeneratePadding(samples uint32) []*Packet {
-	// Guard against an empty payload
-	if samples == 0 {
-		return nil
-	}
-
-	packets := make([]*Packet, samples)
-
-	for i := 0; i < int(samples); i++ {
-		pp := make([]byte, 255)
-		pp[254] = 255
-
-		packets[i] = &Packet{
-			Header: Header{
-				Version:        2,
-				Padding:        true,
-				Extension:      false,
-				Marker:         false,
-				PayloadType:    p.PayloadType,
-				SequenceNumber: p.Sequencer.NextSequenceNumber(),
-				Timestamp:      p.Timestamp, // Use latest timestamp
-				SSRC:           p.SSRC,
-				CSRC:           []uint32{},
-			},
-			Payload: pp,
-		}
-	}
-
-	return packets
-}
-
-// SkipSamples causes a gap in sample count between Packetize requests so the
-// RTP payloads produced have a gap in timestamps
-func (p *packetizer) SkipSamples(skippedSamples uint32) {
-	p.Timestamp += skippedSamples
 }

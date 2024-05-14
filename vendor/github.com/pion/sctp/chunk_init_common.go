@@ -1,12 +1,10 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
-// SPDX-License-Identifier: MIT
-
 package sctp
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
+
+	"github.com/pkg/errors"
 )
 
 /*
@@ -49,7 +47,6 @@ type chunkInitCommon struct {
 	numInboundStreams              uint16
 	initialTSN                     uint32
 	params                         []param
-	unrecognizedParams             []paramHeader
 }
 
 const (
@@ -57,13 +54,8 @@ const (
 	initOptionalVarHeaderLength = 4
 )
 
-// Init chunk errors
-var (
-	ErrInitChunkParseParamTypeFailed = errors.New("failed to parse param type")
-	ErrInitAckMarshalParam           = errors.New("unable to marshal parameter for INIT/INITACK")
-)
-
 func (i *chunkInitCommon) unmarshal(raw []byte) error {
+
 	i.initiateTag = binary.BigEndian.Uint32(raw[0:])
 	i.advertisedReceiverWindowCredit = binary.BigEndian.Uint32(raw[4:])
 	i.numOutboundStreams = binary.BigEndian.Uint16(raw[8:])
@@ -91,21 +83,18 @@ func (i *chunkInitCommon) unmarshal(raw []byte) error {
 	remaining := len(raw) - offset
 	for remaining > 0 {
 		if remaining > initOptionalVarHeaderLength {
-			var pHeader paramHeader
-			if err := pHeader.unmarshal(raw[offset:]); err != nil {
-				return fmt.Errorf("%w: %v", ErrInitChunkParseParamTypeFailed, err) //nolint:errorlint
-			}
-
-			p, err := buildParam(pHeader.typ, raw[offset:])
+			pType, err := parseParamType(raw[offset:])
 			if err != nil {
-				i.unrecognizedParams = append(i.unrecognizedParams, pHeader)
-			} else {
-				i.params = append(i.params, p)
+				return errors.Wrap(err, "failed to parse param type")
 			}
-
-			padding := getPadding(pHeader.length())
-			offset += pHeader.length() + padding
-			remaining -= pHeader.length() + padding
+			p, err := buildParam(pType, raw[offset:])
+			if err != nil {
+				return errors.Wrap(err, "Failed unmarshalling param in Init Chunk")
+			}
+			i.params = append(i.params, p)
+			padding := getPadding(p.length())
+			offset += p.length() + padding
+			remaining -= p.length() + padding
 		} else {
 			break
 		}
@@ -124,7 +113,7 @@ func (i *chunkInitCommon) marshal() ([]byte, error) {
 	for idx, p := range i.params {
 		pp, err := p.marshal()
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrInitAckMarshalParam, err) //nolint:errorlint
+			return nil, errors.Wrap(err, "Unable to marshal parameter for INIT/INITACK")
 		}
 
 		out = append(out, pp...)
@@ -161,7 +150,7 @@ func (i chunkInitCommon) String() string {
 	)
 
 	for i, param := range i.params {
-		res += fmt.Sprintf("Param %d:\n %s", i, param)
+		res = res + fmt.Sprintf("Param %d:\n %s", i, param)
 	}
 	return res
 }

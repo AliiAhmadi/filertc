@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
-// SPDX-License-Identifier: MIT
-
 package rtcp
 
 import (
@@ -19,7 +16,6 @@ const (
 	TypeApplicationDefined        PacketType = 204 // RFC 3550, 6.7 (unimplemented)
 	TypeTransportSpecificFeedback PacketType = 205 // RFC 4585, 6051
 	TypePayloadSpecificFeedback   PacketType = 206 // RFC 4585, 6.3
-	TypeExtendedReport            PacketType = 207 // RFC 3611
 
 )
 
@@ -27,14 +23,9 @@ const (
 const (
 	FormatSLI  uint8 = 2
 	FormatPLI  uint8 = 1
-	FormatFIR  uint8 = 4
 	FormatTLN  uint8 = 1
 	FormatRRR  uint8 = 5
-	FormatCCFB uint8 = 11
 	FormatREMB uint8 = 15
-
-	// https://tools.ietf.org/html/draft-holmer-rmcat-transport-wide-cc-extensions-01#page-5
-	FormatTCC uint8 = 15
 )
 
 func (p PacketType) String() string {
@@ -53,8 +44,6 @@ func (p PacketType) String() string {
 		return "TSFB"
 	case TypePayloadSpecificFeedback:
 		return "PSFB"
-	case TypeExtendedReport:
-		return "XR"
 	default:
 		return string(p)
 	}
