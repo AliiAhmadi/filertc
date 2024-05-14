@@ -1,10 +1,22 @@
 .DEFAULT_GOAL := build
 
-build: 
+build: vet
 	@go build -o frtc .
 .PHONY: build
 
-build-all:
+fmt:
+	@go fmt ./...
+.PHONY: fmt
+
+lint: fmt
+	@golint ./...
+.PHONY: lint
+
+vet: fmt
+	@go vet ./...
+.PHONY: vet
+
+build-all: vet
 	@echo "compiling windows version ..."
 	@GOOS=windows GOARCH=amd64 go build -o ./bin/win/frtc.exe .
 
