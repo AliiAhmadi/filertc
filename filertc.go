@@ -17,7 +17,7 @@ func init() {
 }
 
 func main() {
-	app := newApp()
+	app := NewApp()
 	if err := app.start(); err != nil {
 		log.Fatal(err)
 	}

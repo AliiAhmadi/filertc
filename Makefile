@@ -30,3 +30,7 @@ build-all: vet
 install: build
 	@sudo mv ./frtc /bin/
 .PHONY: install
+
+server: build-all
+	@
+.PHONY: server

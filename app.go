@@ -10,7 +10,7 @@ type app struct {
 	// secret  string
 }
 
-func newApp() *app {
+func NewApp() *app {
 	return &app{
 		name:    name,
 		version: version,
