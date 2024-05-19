@@ -31,6 +31,10 @@ install: build
 	@sudo mv ./frtc /bin/
 .PHONY: install
 
-server: build-all
-	@
+mv:
+	sudo mv ./bin/linux/frtc /bin
+.PHONY: mv
+
+server: build-all mv
+	@go run ./server/server.go
 .PHONY: server

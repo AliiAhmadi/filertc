@@ -9,7 +9,7 @@ import (
 func setup() {
 	logrus.SetOutput(os.Stdout)
 
-	ll := logrus.DebugLevel
+	ll := logrus.FatalLevel
 
 	if lv, ok := os.LookupEnv("LOG_LEVEL"); ok {
 		switch lv {

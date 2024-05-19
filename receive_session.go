@@ -61,7 +61,6 @@ func (s *receiveSession) receiveData() {
 		select {
 		case <-s.sess.Done:
 			s.sess.NetworkStats.stop()
-			fmt.Printf("\nNetwork: %s\n", s.sess.NetworkStats.String())
 			return
 		case msg := <-s.msgChannel:
 			n, err := s.stream.Write(msg.Data)
@@ -69,7 +68,7 @@ func (s *receiveSession) receiveData() {
 				logrus.Errorln(err)
 			} else {
 				speed := s.sess.NetworkStats.bandwidth()
-				fmt.Printf("Transferring at %.2f MB/s\r", speed)
+				fmt.Printf("%.2f MB/s\r", speed)
 				s.sess.NetworkStats.addBytes(uint64(n))
 			}
 		}

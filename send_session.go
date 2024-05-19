@@ -138,7 +138,7 @@ func (s *sendSession) onBufferedAmountLow() func() {
 		}
 
 		speed := s.sess.NetworkStats.bandwidth()
-		fmt.Printf("Transferring at %.2f MB/s\r", speed)
+		fmt.Printf("%.2f MB/s\r", speed)
 
 		for len(s.msgToBeSent) != 0 {
 			cur := s.msgToBeSent[0]
@@ -222,7 +222,6 @@ func (s *inSession) createSessionDescription(d webrtc.SessionDescription) error 
 		return err
 	}
 
-	fmt.Println("Send this SDP:")
 	fmt.Fprintf(s.sdpOutput, "%s\n", res)
 	return nil
 }
@@ -288,7 +287,6 @@ func (s *sendSession) readFile() {
 func (s *inSession) readSDP() error {
 	var sdp webrtc.SessionDescription
 
-	fmt.Println("Enter remote SDP:")
 	for {
 		enc, err := readStream(s.sdpInput)
 		if err == nil {
