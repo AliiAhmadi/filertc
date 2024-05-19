@@ -10,6 +10,8 @@ const (
 	senderBuffSize  = 16384
 	bufferThreshold = 512 * 1024
 	stun            = "stun.l.google.com:19302"
+	local_file      = "local_sdp.txt"
+	remote_file     = "remote_sdp.txt"
 )
 
 func init() {

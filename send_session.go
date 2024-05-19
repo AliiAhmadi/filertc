@@ -222,8 +222,7 @@ func (s *inSession) createSessionDescription(d webrtc.SessionDescription) error 
 		return err
 	}
 
-	fmt.Fprintf(s.sdpOutput, "%s\n", res)
-	return nil
+	return os.WriteFile(local_file, []byte(res), 0644)
 }
 
 func (s *sendSession) initialize() error {
