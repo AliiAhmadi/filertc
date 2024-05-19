@@ -21,3 +21,5 @@
 go.work
 .env
 filertc
+./local_sdp.txt
+./remote_sdp.txt
